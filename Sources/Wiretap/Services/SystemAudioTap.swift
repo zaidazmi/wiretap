@@ -4,6 +4,7 @@ import Foundation
 
 protocol SystemAudioTapping: AnyObject {
     var isRunning: Bool { get }
+    var capturedFrameCount: Int64 { get }
 
     func start(writingTo outputURL: URL) throws
     @discardableResult func stop() -> CaptureStopResult
@@ -19,6 +20,10 @@ final class SystemAudioTap: SystemAudioTapping {
 
     var isRunning: Bool {
         ioProcID != nil
+    }
+
+    var capturedFrameCount: Int64 {
+        writer?.capturedFrameCount ?? 0
     }
 
     func start(writingTo outputURL: URL) throws {

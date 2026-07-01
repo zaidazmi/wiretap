@@ -4,6 +4,7 @@ import Foundation
 
 protocol MicrophoneRecording: AnyObject {
     var isRecording: Bool { get }
+    var capturedFrameCount: Int64 { get }
 
     func startRecording(to url: URL) throws
     @discardableResult func stopRecording() -> CaptureStopResult
@@ -19,6 +20,10 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
     var isRecording: Bool {
         ioProcID != nil
+    }
+
+    var capturedFrameCount: Int64 {
+        writer?.capturedFrameCount ?? 0
     }
 
     func startRecording(to url: URL) throws {

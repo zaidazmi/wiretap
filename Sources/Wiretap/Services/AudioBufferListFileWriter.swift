@@ -49,6 +49,10 @@ final class AudioBufferListFileWriter {
         flush()
     }
 
+    var capturedFrameCount: Int64 {
+        state.capturedFrameCount
+    }
+
     func write(inputData: UnsafePointer<AudioBufferList>) {
         guard let pendingBuffer = copiedBuffer(from: inputData) else { return }
         writeQueue.async { [state, pendingBuffer] in
@@ -179,6 +183,12 @@ private final class WriteState: @unchecked Sendable {
             capturedFrameCount: storedCapturedFrameCount,
             writeError: storedWriteError
         )
+    }
+
+    var capturedFrameCount: Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedCapturedFrameCount
     }
 
     func write(_ buffer: AVAudioPCMBuffer) {

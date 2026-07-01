@@ -198,6 +198,50 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testTickWarnsAndRetainsSourcesWhenCaptureSourceStalls() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap(
+            stopResult: CaptureStopResult(capturedFrameCount: 48_000)
+        )
+        let microphoneRecorder = FakeMicrophoneRecorder(
+            stopResult: CaptureStopResult(
+                duration: 20,
+                capturedFrameCount: 96_000
+            )
+        )
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0,
+            captureStallThreshold: 5
+        )
+
+        store.startRecording()
+        let startedAt = try XCTUnwrap(store.recordingStartedAt)
+        systemAudioTap.capturedFrameCount = 48_000
+        microphoneRecorder.capturedFrameCount = 48_000
+
+        store.tick(now: startedAt.addingTimeInterval(1))
+
+        microphoneRecorder.capturedFrameCount = 96_000
+
+        store.tick(now: startedAt.addingTimeInterval(8))
+
+        XCTAssertEqual(store.systemAudioState, .unavailable)
+        XCTAssertEqual(store.notice?.title, "Capture Source Stalled")
+        XCTAssertTrue(store.notice?.message.localizedStandardContains("System audio") == true)
+
+        store.stopRecording()
+
+        let recording = try XCTUnwrap(store.recordings.first)
+        XCTAssertEqual(recording.status, .interrupted)
+        XCTAssertNil(recording.fileURL)
+        XCTAssertNotNil(recording.recoveryFolderURL)
+    }
+
+    @MainActor
     func testTickSynchronizesPlaybackTimeline() {
         let recording = makeRecording(title: "Playback")
         let playbackController = FakePlaybackController()
@@ -367,6 +411,7 @@ private final class FakePlaybackController: AudioPlaybackControlling {
 
 private final class FakeSystemAudioTap: SystemAudioTapping {
     var isRunning = false
+    var capturedFrameCount: Int64 = 0
     var startCallCount = 0
     var stopCallCount = 0
     let startError: Error?
@@ -401,6 +446,7 @@ private final class FakeSystemAudioTap: SystemAudioTapping {
 
 private final class FakeMicrophoneRecorder: MicrophoneRecording {
     var isRecording = false
+    var capturedFrameCount: Int64 = 0
     var startCallCount = 0
     var stopCallCount = 0
     var stopResult: CaptureStopResult

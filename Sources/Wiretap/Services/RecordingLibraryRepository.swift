@@ -5,10 +5,15 @@ struct RecordingLibraryRepository {
 
     init(
         fileManager: FileManager = .default,
-        appDirectoryName: String = "Wiretap"
+        appDirectoryName: String = "Wiretap",
+        applicationSupportDirectory: URL? = nil
     ) {
-        let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        self.applicationSupportDirectory = baseURL.appendingPathComponent(appDirectoryName, isDirectory: true)
+        if let applicationSupportDirectory {
+            self.applicationSupportDirectory = applicationSupportDirectory
+        } else {
+            let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            self.applicationSupportDirectory = baseURL.appendingPathComponent(appDirectoryName, isDirectory: true)
+        }
     }
 
     var recordingsDirectory: URL {

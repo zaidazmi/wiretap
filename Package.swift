@@ -17,6 +17,10 @@ let package = Package(
             resources: [
                 .process("Resources")
             ]
+        ),
+        .testTarget(
+            name: "WiretapTests",
+            dependencies: ["Wiretap"]
         )
     ]
 )

@@ -248,7 +248,13 @@ final class WiretapStore {
             AudioMixerInput(
                 url: microphoneURL,
                 source: .microphone,
-                startOffset: sourceOffset(for: .microphone, from: sourceStartDates, referenceDate: referenceStartDate)
+                startOffset: sourceOffset(for: .microphone, from: sourceStartDates, referenceDate: referenceStartDate),
+                targetDuration: sourceTargetDuration(
+                    for: .microphone,
+                    sessionDuration: duration,
+                    sourceStartDates: sourceStartDates,
+                    referenceDate: referenceStartDate
+                )
             )
         ]
         if captureSources.contains(.systemAudio) {
@@ -259,6 +265,12 @@ final class WiretapStore {
                     startOffset: sourceOffset(
                         for: .systemAudio,
                         from: sourceStartDates,
+                        referenceDate: referenceStartDate
+                    ),
+                    targetDuration: sourceTargetDuration(
+                        for: .systemAudio,
+                        sessionDuration: duration,
+                        sourceStartDates: sourceStartDates,
                         referenceDate: referenceStartDate
                     )
                 ),
@@ -542,6 +554,22 @@ private extension WiretapStore {
         else { return 0 }
 
         return max(0, sourceStartDate.timeIntervalSince(referenceDate))
+    }
+
+    func sourceTargetDuration(
+        for source: RecordingSource,
+        sessionDuration: TimeInterval,
+        sourceStartDates: [RecordingSource: Date],
+        referenceDate: Date?
+    ) -> TimeInterval? {
+        let offset = sourceOffset(
+            for: source,
+            from: sourceStartDates,
+            referenceDate: referenceDate
+        )
+        let targetDuration = sessionDuration - offset
+
+        return targetDuration > 0 ? targetDuration : nil
     }
 
     func microphoneCaptureState(for permissionState: PermissionState) -> CaptureSourceState {

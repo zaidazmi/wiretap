@@ -17,11 +17,12 @@ struct AudioMixerWriter {
             try FileManager.default.removeItem(at: outputURL)
         }
 
-        let timelineDuration = usableInputs
-            .map { $0.input.startOffset + $0.duration }
+        let renderInputs = usableInputs.map(RenderAudioInput.init)
+        let timelineDuration = renderInputs
+            .map { $0.input.input.startOffset + $0.outputDuration }
             .max() ?? 0
         try render(
-            usableInputs: usableInputs,
+            renderInputs: renderInputs,
             timelineDuration: timelineDuration,
             outputURL: outputURL
         )
@@ -62,7 +63,7 @@ struct AudioMixerWriter {
     }
 
     private func render(
-        usableInputs: [UsableAudioInput],
+        renderInputs: [RenderAudioInput],
         timelineDuration: TimeInterval,
         outputURL: URL
     ) throws {
@@ -76,15 +77,20 @@ struct AudioMixerWriter {
         }
 
         let engine = AVAudioEngine()
-        let playerNodes = try usableInputs.map { input in
+        let playerNodes = try renderInputs.map { input in
             let playerNode = AVAudioPlayerNode()
-            let file = try AVAudioFile(forReading: input.input.url)
-            let startFrame = AVAudioFramePosition(round(input.input.startOffset * outputSampleRate))
+            let varispeedNode = AVAudioUnitVarispeed()
+            varispeedNode.rate = input.playbackRate
+
+            let file = try AVAudioFile(forReading: input.input.input.url)
+            let startFrame = AVAudioFramePosition(round(input.input.input.startOffset * outputSampleRate))
             let startTime = startFrame > 0
                 ? AVAudioTime(sampleTime: startFrame, atRate: outputSampleRate)
                 : nil
             engine.attach(playerNode)
-            engine.connect(playerNode, to: engine.mainMixerNode, format: file.processingFormat)
+            engine.attach(varispeedNode)
+            engine.connect(playerNode, to: varispeedNode, format: file.processingFormat)
+            engine.connect(varispeedNode, to: engine.mainMixerNode, format: file.processingFormat)
             playerNode.scheduleFile(file, at: startTime)
             return playerNode
         }
@@ -173,15 +179,43 @@ private struct UsableAudioInput {
     var duration: TimeInterval
 }
 
+private struct RenderAudioInput {
+    var input: UsableAudioInput
+    var outputDuration: TimeInterval
+    var playbackRate: Float
+
+    init(input: UsableAudioInput) {
+        self.input = input
+
+        let targetDuration = input.input.targetDuration
+        let usableTargetDuration = targetDuration.flatMap { duration -> TimeInterval? in
+            guard duration.isFinite, duration > 0 else { return nil }
+            return duration
+        }
+        let unclampedRate = input.duration / (usableTargetDuration ?? input.duration)
+        let clampedRate = min(4, max(0.25, unclampedRate))
+
+        playbackRate = Float(clampedRate)
+        outputDuration = input.duration / clampedRate
+    }
+}
+
 struct AudioMixerInput: Sendable, Equatable {
     var url: URL
     var source: RecordingSource
     var startOffset: TimeInterval
+    var targetDuration: TimeInterval?
 
-    init(url: URL, source: RecordingSource, startOffset: TimeInterval = 0) {
+    init(
+        url: URL,
+        source: RecordingSource,
+        startOffset: TimeInterval = 0,
+        targetDuration: TimeInterval? = nil
+    ) {
         self.url = url
         self.source = source
         self.startOffset = max(0, startOffset)
+        self.targetDuration = targetDuration.map { max(0, $0) }
     }
 }
 

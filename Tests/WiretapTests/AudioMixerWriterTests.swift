@@ -121,6 +121,29 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertGreaterThan(activeAmplitude, 0.02)
     }
 
+    func testMixStretchesInputToTargetDurationForDriftCorrection() async throws {
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-drift.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("mixed-drift.m4a")
+        try writeTone(to: micURL, duration: 0.16, frequency: 660)
+
+        let result = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: micURL, source: .microphone, targetDuration: 0.32)
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertGreaterThan(result.duration, 0.28)
+
+        let lateAmplitude = try averageAbsoluteAmplitude(
+            in: outputURL,
+            from: 0.24,
+            duration: 0.05
+        )
+
+        XCTAssertGreaterThan(lateAmplitude, 0.02)
+    }
+
     private func writeTone(to url: URL, duration: TimeInterval, frequency: Double) throws {
         let sampleRate = 48_000.0
         let channelCount: AVAudioChannelCount = 2

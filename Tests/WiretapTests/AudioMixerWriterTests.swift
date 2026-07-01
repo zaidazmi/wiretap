@@ -106,6 +106,36 @@ final class AudioMixerWriterTests: XCTestCase {
         )
     }
 
+    func testMixConvertsInputTo48kStereoOutput() async throws {
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-44k-mono.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("converted-output.m4a")
+        try writeTone(
+            to: micURL,
+            duration: 0.24,
+            frequency: 330,
+            sampleRate: 44_100,
+            channelCount: 1
+        )
+
+        let result = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: micURL, source: .microphone)
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertEqual(result.sources, [.microphone])
+        XCTAssertEqual(result.duration, 0.24, accuracy: 0.03)
+
+        let streamDescription = try await audioStreamDescription(for: outputURL)
+        XCTAssertEqual(streamDescription.mSampleRate, 48_000, accuracy: 1)
+        XCTAssertEqual(streamDescription.mChannelsPerFrame, 2)
+        XCTAssertGreaterThan(
+            try averageAbsoluteAmplitude(in: outputURL, from: 0.04, duration: 0.12),
+            0.02
+        )
+    }
+
     func testMixIgnoresInputWithoutAudioTrack() async throws {
         let emptyURL = temporaryDirectory.appendingPathComponent("empty.m4a")
         let micURL = temporaryDirectory.appendingPathComponent("microphone.m4a")
@@ -217,9 +247,9 @@ final class AudioMixerWriterTests: XCTestCase {
         duration: TimeInterval,
         frequency: Double,
         amplitude: Double = 0.2,
-        sampleRate: Double = 48_000.0
+        sampleRate: Double = 48_000.0,
+        channelCount: AVAudioChannelCount = 2
     ) throws {
-        let channelCount: AVAudioChannelCount = 2
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
@@ -321,5 +351,15 @@ final class AudioMixerWriterTests: XCTestCase {
         }
 
         return peak
+    }
+
+    private func audioStreamDescription(for url: URL) async throws -> AudioStreamBasicDescription {
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        let track = try XCTUnwrap(tracks.first)
+        let formatDescriptions = try await track.load(.formatDescriptions)
+        return CMAudioFormatDescriptionGetStreamBasicDescription(
+            formatDescriptions[0]
+        )!.pointee
     }
 }

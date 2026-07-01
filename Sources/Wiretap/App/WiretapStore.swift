@@ -356,6 +356,8 @@ final class WiretapStore {
             resetRecordingState()
             if let failure = error as? RecordingStartFailure {
                 notice = failure.notice
+            } else if case RecordingLibraryError.insufficientDiskSpace = error {
+                notice = WiretapNotice(title: "Not Enough Disk Space", message: error.localizedDescription)
             } else {
                 microphoneState = .unavailable
                 notice = WiretapNotice(title: "Recording Error", message: error.localizedDescription)
@@ -688,6 +690,11 @@ final class WiretapStore {
             microphoneResult: microphoneResult,
             systemAudioResult: systemAudioResult
         )
+        let captureDropError = captureDropFailure(
+            captureSources: captureSources,
+            microphoneResult: microphoneResult,
+            systemAudioResult: systemAudioResult
+        )
 
         guard let id = activeRecordingID,
               let finalURL = activeFinalURL,
@@ -739,6 +746,18 @@ final class WiretapStore {
                 return
             }
 
+            if let captureDropError {
+                retainInterruptedSources(
+                    id: id,
+                    title: title,
+                    durationFallback: duration,
+                    cleanupURLs: cleanupURLs,
+                    reason: reason,
+                    error: captureDropError
+                )
+                return
+            }
+
             let inputs = mixerInputs(
                 microphoneURL: microphoneURL,
                 systemAudioURL: systemAudioURL,
@@ -781,6 +800,22 @@ final class WiretapStore {
 
         if captureSources.contains(.microphone), !microphoneResult.didCaptureFrames {
             return .microphone
+        }
+
+        return nil
+    }
+
+    private func captureDropFailure(
+        captureSources: Set<RecordingSource>,
+        microphoneResult: CaptureStopResult,
+        systemAudioResult: CaptureStopResult
+    ) -> CaptureSourceFailure? {
+        if captureSources.contains(.systemAudio), systemAudioResult.droppedFrameCount > 0 {
+            return .droppedFrames(source: .systemAudio, count: systemAudioResult.droppedFrameCount)
+        }
+
+        if captureSources.contains(.microphone), microphoneResult.droppedFrameCount > 0 {
+            return .droppedFrames(source: .microphone, count: microphoneResult.droppedFrameCount)
         }
 
         return nil
@@ -879,12 +914,15 @@ enum WiretapNoticeRecovery: Equatable {
 
 private enum CaptureSourceFailure: LocalizedError {
     case noCapturedFrames(source: RecordingSource)
+    case droppedFrames(source: RecordingSource, count: Int64)
     case stalled(source: RecordingSource)
 
     var errorDescription: String? {
         switch self {
         case let .noCapturedFrames(source):
             "Wiretap did not receive any audio buffers from \(source.label)."
+        case let .droppedFrames(source, count):
+            "Wiretap dropped \(count) audio frames from \(source.label) before finalization completed."
         case let .stalled(source):
             "Wiretap stopped receiving audio buffers from \(source.label). Stop this recording and check the source before trying again."
         }

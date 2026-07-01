@@ -3,28 +3,28 @@ import SwiftUI
 @main
 struct WiretapApp: App {
     @State private var store = WiretapStore.preview
+    private let libraryWindowController = LibraryWindowController()
 
     var body: some Scene {
-        WindowGroup("Wiretap Library", id: "library") {
-            LibraryView(store: store)
-                .frame(minWidth: 920, minHeight: 620)
+        MenuBarExtra {
+            MenuBarView(store: store, libraryWindowController: libraryWindowController)
+        } label: {
+            Image(systemName: store.isRecording ? "record.circle.fill" : "waveform.circle")
+                .symbolRenderingMode(store.isRecording ? .multicolor : .hierarchical)
         }
-        .defaultSize(width: 1080, height: 720)
+        .menuBarExtraStyle(.window)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button(store.isRecording ? "Stop Recording" : "Start Recording") {
                     store.toggleRecording()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                Button("Open Library") {
+                    libraryWindowController.show(store: store)
+                }
+                .keyboardShortcut("l", modifiers: [.command])
             }
         }
-
-        MenuBarExtra {
-            MenuBarView(store: store)
-        } label: {
-            Image(systemName: store.isRecording ? "record.circle.fill" : "waveform.circle")
-                .symbolRenderingMode(store.isRecording ? .multicolor : .hierarchical)
-        }
-        .menuBarExtraStyle(.window)
     }
 }

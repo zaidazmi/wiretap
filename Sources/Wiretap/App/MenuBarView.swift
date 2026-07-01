@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Bindable var store: WiretapStore
-    @Environment(\.openWindow) private var openWindow
+    let libraryWindowController: LibraryWindowController
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -30,8 +30,7 @@ struct MenuBarView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Button {
-                    openWindow(id: "library")
-                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    libraryWindowController.show(store: store)
                 } label: {
                     Label("Open Library", systemImage: "rectangle.stack")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -58,6 +57,6 @@ struct MenuBarView: View {
 }
 
 #Preview {
-    MenuBarView(store: .preview)
+    MenuBarView(store: .preview, libraryWindowController: LibraryWindowController())
         .padding()
 }

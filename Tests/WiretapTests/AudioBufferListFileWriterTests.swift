@@ -52,6 +52,61 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(tracks.count, 1)
     }
 
+    func testQueuedWritesHandleSmallReusableBufferPool() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("small-pool.m4a")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.01)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format,
+            bufferPoolSize: 1,
+            pooledFrameCapacity: 1_024
+        )
+
+        for _ in 0..<24 {
+            writer?.write(inputData: buffer.audioBufferList)
+        }
+        writer?.flush()
+        writer = nil
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+
+        XCTAssertGreaterThan(duration, 0.20)
+    }
+
+    func testOversizedInputBypassesPoolAndStillWrites() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("oversized-fallback.m4a")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.05)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format,
+            bufferPoolSize: 2,
+            pooledFrameCapacity: 128
+        )
+
+        writer?.write(inputData: buffer.audioBufferList)
+        writer?.write(inputData: buffer.audioBufferList)
+        writer?.flush()
+        writer = nil
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+
+        XCTAssertGreaterThan(duration, 0.08)
+    }
+
     private func makeToneBuffer(
         format: AVAudioFormat,
         duration: TimeInterval,

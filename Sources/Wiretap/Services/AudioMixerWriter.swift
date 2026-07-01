@@ -2,18 +2,46 @@ import AVFoundation
 import Foundation
 
 struct AudioMixerWriter {
-    func mix(inputURLs: [URL], outputURL: URL) async throws -> TimeInterval {
-        let existingInputs = inputURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+    func mix(inputs: [AudioMixerInput], outputURL: URL) async throws -> AudioMixResult {
+        let existingInputs = inputs.filter { FileManager.default.fileExists(atPath: $0.url.path) }
         guard !existingInputs.isEmpty else {
             throw RecordingLibraryError.missingFile
         }
 
-        if existingInputs.count == 1 {
+        var usableInputs: [(input: AudioMixerInput, asset: AVURLAsset, track: AVAssetTrack, duration: CMTime)] = []
+
+        for input in existingInputs {
+            let asset = AVURLAsset(url: input.url)
+            let tracks: [AVAssetTrack]
+            do {
+                tracks = try await asset.loadTracks(withMediaType: .audio)
+            } catch {
+                continue
+            }
+            guard let track = tracks.first else { continue }
+
+            let duration: CMTime
+            do {
+                duration = try await asset.load(.duration)
+            } catch {
+                continue
+            }
+            guard duration.seconds.isFinite, duration.seconds > 0 else { continue }
+
+            usableInputs.append((input, asset, track, duration))
+        }
+
+        guard !usableInputs.isEmpty else {
+            throw RecordingLibraryError.missingFile
+        }
+
+        if usableInputs.count == 1 {
             if FileManager.default.fileExists(atPath: outputURL.path) {
                 try FileManager.default.removeItem(at: outputURL)
             }
-            try FileManager.default.copyItem(at: existingInputs[0], to: outputURL)
-            return try await duration(of: outputURL)
+            try FileManager.default.copyItem(at: usableInputs[0].input.url, to: outputURL)
+            let duration = try await duration(of: outputURL)
+            return AudioMixResult(duration: duration, sources: [usableInputs[0].input.source])
         }
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
@@ -23,22 +51,18 @@ struct AudioMixerWriter {
         let composition = AVMutableComposition()
         var longestDuration = CMTime.zero
 
-        for inputURL in existingInputs {
-            let asset = AVURLAsset(url: inputURL)
-            let tracks = try await asset.loadTracks(withMediaType: .audio)
-            guard let sourceTrack = tracks.first,
-                  let compositionTrack = composition.addMutableTrack(
+        for input in usableInputs {
+            guard let compositionTrack = composition.addMutableTrack(
                     withMediaType: .audio,
                     preferredTrackID: kCMPersistentTrackID_Invalid
-                  )
+            )
             else { continue }
 
-            let duration = try await asset.load(.duration)
-            longestDuration = max(longestDuration, duration)
+            longestDuration = max(longestDuration, input.duration)
 
             try compositionTrack.insertTimeRange(
-                CMTimeRange(start: .zero, duration: duration),
-                of: sourceTrack,
+                CMTimeRange(start: .zero, duration: input.duration),
+                of: input.track,
                 at: .zero
             )
         }
@@ -55,13 +79,26 @@ struct AudioMixerWriter {
         }
 
         try await exportSession.export(to: outputURL, as: .m4a)
-        return longestDuration.seconds
+        return AudioMixResult(
+            duration: longestDuration.seconds,
+            sources: usableInputs.map(\.input.source)
+        )
     }
 
     private func duration(of url: URL) async throws -> TimeInterval {
         let asset = AVURLAsset(url: url)
         return try await asset.load(.duration).seconds
     }
+}
+
+struct AudioMixerInput: Sendable, Equatable {
+    var url: URL
+    var source: RecordingSource
+}
+
+struct AudioMixResult: Sendable, Equatable {
+    var duration: TimeInterval
+    var sources: [RecordingSource]
 }
 
 enum AudioMixerWriterError: LocalizedError {

@@ -179,7 +179,10 @@ final class WiretapStore {
                 title: title,
                 durationFallback: duration,
                 finalURL: finalURL,
-                sourceURLs: [systemAudioURL, microphoneURL]
+                inputs: [
+                    AudioMixerInput(url: systemAudioURL, source: .systemAudio),
+                    AudioMixerInput(url: microphoneURL, source: .microphone)
+                ]
             )
         }
     }
@@ -339,16 +342,18 @@ final class WiretapStore {
         title: String,
         durationFallback: TimeInterval,
         finalURL: URL,
-        sourceURLs: [URL]
+        inputs: [AudioMixerInput]
     ) async {
+        let sourceURLs = inputs.map(\.url)
+
         do {
-            let mixedDuration = try await mixerWriter.mix(inputURLs: sourceURLs, outputURL: finalURL)
-            let sourceSummary = sourceSummary(for: sourceURLs)
+            let mixResult = try await mixerWriter.mix(inputs: inputs, outputURL: finalURL)
+            let sourceSummary = Recording.sourceSummary(for: mixResult.sources)
             let recording = Recording(
                 id: id,
                 title: title,
                 createdAt: Date(),
-                duration: max(mixedDuration, durationFallback, 1),
+                duration: max(mixResult.duration, durationFallback, 1),
                 fileURL: finalURL,
                 fileSizeBytes: repository.fileSize(for: finalURL),
                 sampleRate: 48_000,
@@ -365,29 +370,6 @@ final class WiretapStore {
             repository.deleteTemporaryFiles(sourceURLs)
             notice = WiretapNotice(title: "Finalization Failed", message: error.localizedDescription)
         }
-    }
-
-    private func sourceSummary(for sourceURLs: [URL]) -> String {
-        let existingNames = sourceURLs.compactMap { url -> String? in
-            guard FileManager.default.fileExists(atPath: url.path),
-                  repository.fileSize(for: url) > 0
-            else { return nil }
-
-            let name = url.deletingPathExtension().lastPathComponent
-            if name.hasSuffix("-system") {
-                return "System audio"
-            }
-            if name.hasSuffix("-microphone") {
-                return "default microphone"
-            }
-            return nil
-        }
-
-        if existingNames.contains("System audio"), existingNames.contains("default microphone") {
-            return "System audio + default microphone"
-        }
-
-        return existingNames.first ?? "Recorded audio"
     }
 }
 

@@ -1,5 +1,17 @@
 import Foundation
 
+enum RecordingSource: String, Codable, CaseIterable, Sendable {
+    case systemAudio
+    case microphone
+
+    var label: String {
+        switch self {
+        case .systemAudio: "System audio"
+        case .microphone: "default microphone"
+        }
+    }
+}
+
 struct Recording: Identifiable, Hashable, Codable, Sendable {
     enum Status: String, Codable, CaseIterable, Sendable {
         case finalized
@@ -80,6 +92,16 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
 
     var technicalSummary: String {
         "\(sampleRate / 1_000) kHz - \(channelCount == 1 ? "Mono" : "Stereo") - AAC"
+    }
+
+    static func sourceSummary(for sources: [RecordingSource]) -> String {
+        let uniqueSources = RecordingSource.allCases.filter { sources.contains($0) }
+
+        if uniqueSources == [.systemAudio, .microphone] {
+            return "System audio + default microphone"
+        }
+
+        return uniqueSources.first?.label ?? "Recorded audio"
     }
 }
 

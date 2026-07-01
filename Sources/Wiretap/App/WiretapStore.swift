@@ -380,6 +380,8 @@ final class WiretapStore {
               let index = recordings.firstIndex(where: { $0.id == selectedRecordingID })
         else { return }
 
+        guard recordings[index].status != .recording else { return }
+
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return }
 

@@ -58,6 +58,7 @@ struct RecordingDetailView: View {
                     )
                     .textFieldStyle(.plain)
                     .font(.largeTitle.weight(.semibold))
+                    .disabled(recording.status == .recording)
 
                     HStack(spacing: 12) {
                         StatusCapsule(status: recording.status)
@@ -104,6 +105,25 @@ struct RecordingDetailView: View {
                     MetadataRow(title: "Channels", value: recording.channelCount == 1 ? "Mono" : "Stereo")
                 }
             }
+
+            if recording.status == .interrupted, let recoveryFolderURL = recording.recoveryFolderURL {
+                GridRow {
+                    DetailPanel(title: "Recovery", systemImage: "externaldrive.badge.exclamationmark") {
+                        Text("Source files were retained because finalization was interrupted.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+
+                        MetadataRow(title: "Folder", value: recoveryFolderURL.path)
+
+                        Button {
+                            store.reveal(recording)
+                        } label: {
+                            Label("Reveal Recovery Folder", systemImage: "folder")
+                        }
+                    }
+                    .gridCellColumns(2)
+                }
+            }
         }
     }
 }
@@ -126,8 +146,9 @@ private struct PlayerSurface: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            WaveformPlaceholder(progress: progress)
-                .frame(height: 96)
+            PlaybackProgressTrack(progress: progress)
+                .frame(height: 14)
+                .padding(.vertical, 8)
 
             HStack(spacing: 14) {
                 Button {
@@ -168,32 +189,22 @@ private struct PlayerSurface: View {
     }
 }
 
-private struct WaveformPlaceholder: View {
+private struct PlaybackProgressTrack: View {
     let progress: Double
 
     var body: some View {
         GeometryReader { proxy in
-            HStack(alignment: .center, spacing: 3) {
-                ForEach(0..<56, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(indexProgress(index) <= progress ? Color.accentColor : Color.secondary.opacity(0.24))
-                        .frame(height: barHeight(index, maxHeight: proxy.size.height))
-                }
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.secondary.opacity(0.18))
+
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.accentColor)
+                    .frame(width: proxy.size.width * min(1, max(0, progress)))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .accessibilityHidden(true)
-    }
-
-    private func indexProgress(_ index: Int) -> Double {
-        Double(index) / 55
-    }
-
-    private func barHeight(_ index: Int, maxHeight: CGFloat) -> CGFloat {
-        let wave = sin(Double(index) * 0.48) * 0.5 + 0.5
-        let secondary = sin(Double(index) * 1.17) * 0.5 + 0.5
-        let normalized = 0.22 + (wave * 0.52) + (secondary * 0.22)
-        return max(14, maxHeight * normalized)
     }
 }
 

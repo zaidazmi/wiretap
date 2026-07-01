@@ -206,6 +206,23 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRenameSelectedIgnoresActiveRecording() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let recording = makeRecording(title: "Active", status: .recording)
+        try repository.saveRecordings([recording])
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.renameSelected(to: "Too Early")
+
+        XCTAssertEqual(store.recordings.first?.title, "Active")
+        XCTAssertEqual(try repository.loadRecordings().first?.title, "Active")
+    }
+
+    @MainActor
     func testDeleteSelectedPersistsLibraryAndRemovesFile() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()

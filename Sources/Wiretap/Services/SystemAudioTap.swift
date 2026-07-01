@@ -8,8 +8,7 @@ final class SystemAudioTap {
     private var tap: AudioHardwareTap?
     private var aggregateDevice: AudioHardwareAggregateDevice?
     private var ioProcID: AudioDeviceIOProcID?
-    private var inputFormat: AVAudioFormat?
-    private var audioFile: AVAudioFile?
+    private var writer: AudioBufferListFileWriter?
 
     var isRunning: Bool {
         ioProcID != nil
@@ -35,14 +34,7 @@ final class SystemAudioTap {
                 throw SystemAudioTapError.unsupportedFormat
             }
 
-            let channelCount = max(1, Int(inputFormat.channelCount))
-            let outputSettings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: inputFormat.sampleRate,
-                AVNumberOfChannelsKey: channelCount,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-            ]
-            let audioFile = try AVAudioFile(forWriting: outputURL, settings: outputSettings)
+            let writer = try AudioBufferListFileWriter(outputURL: outputURL, inputFormat: inputFormat)
 
             let aggregateDescription: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "Wiretap System Audio Device",
@@ -57,34 +49,30 @@ final class SystemAudioTap {
                 throw SystemAudioTapError.aggregateCreationFailed
             }
 
+            self.tap = tap
+            self.aggregateDevice = aggregateDevice
+            self.writer = writer
+
             var ioProcID: AudioDeviceIOProcID?
             let createStatus = AudioDeviceCreateIOProcIDWithBlock(
                 &ioProcID,
                 aggregateDevice.id,
                 ioQueue
             ) { [weak self] _, inputData, _, _, _ in
-                self?.write(inputData: inputData)
+                self?.writer?.write(inputData: inputData)
             }
 
             guard createStatus == noErr, let ioProcID else {
-                try system.destroyAggregateDevice(aggregateDevice)
-                try system.destroyProcessTap(tap)
                 throw CoreAudioStatusError(status: createStatus, operation: "create tap IOProc")
             }
 
             let startStatus = AudioDeviceStart(aggregateDevice.id, ioProcID)
             guard startStatus == noErr else {
                 AudioDeviceDestroyIOProcID(aggregateDevice.id, ioProcID)
-                try system.destroyAggregateDevice(aggregateDevice)
-                try system.destroyProcessTap(tap)
                 throw CoreAudioStatusError(status: startStatus, operation: "start tap IOProc")
             }
 
-            self.tap = tap
-            self.aggregateDevice = aggregateDevice
             self.ioProcID = ioProcID
-            self.inputFormat = inputFormat
-            self.audioFile = audioFile
         } catch {
             stop()
             throw error
@@ -108,8 +96,7 @@ final class SystemAudioTap {
         ioProcID = nil
         aggregateDevice = nil
         tap = nil
-        inputFormat = nil
-        audioFile = nil
+        writer = nil
     }
 
     private func currentProcessExclusionList() throws -> [AudioObjectID] {
@@ -120,28 +107,6 @@ final class SystemAudioTap {
         return []
     }
 
-    private func write(inputData: UnsafePointer<AudioBufferList>) {
-        guard let inputFormat,
-              let audioFile,
-              let firstBuffer = UnsafeMutableAudioBufferListPointer(
-                UnsafeMutablePointer(mutating: inputData)
-              ).first
-        else { return }
-
-        let streamDescription = inputFormat.streamDescription.pointee
-        let bytesPerFrame = max(1, Int(streamDescription.mBytesPerFrame))
-        let frameLength = AVAudioFrameCount(Int(firstBuffer.mDataByteSize) / bytesPerFrame)
-        guard frameLength > 0,
-              let buffer = AVAudioPCMBuffer(
-                pcmFormat: inputFormat,
-                bufferListNoCopy: UnsafeMutablePointer(mutating: inputData),
-                deallocator: nil
-              )
-        else { return }
-
-        buffer.frameLength = frameLength
-        try? audioFile.write(from: buffer)
-    }
 }
 
 enum SystemAudioTapError: LocalizedError {

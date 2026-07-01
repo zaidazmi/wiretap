@@ -1,57 +1,98 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 
-final class MicrophoneRecorder: NSObject {
-    private var recorder: AVAudioRecorder?
+final class MicrophoneRecorder {
+    private let system = AudioHardwareSystem.shared
+    private let ioQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.microphone-recorder", qos: .userInitiated)
+    private var device: AudioHardwareDevice?
+    private var ioProcID: AudioDeviceIOProcID?
+    private var writer: AudioBufferListFileWriter?
     private var startedAt: Date?
 
     var isRecording: Bool {
-        recorder?.isRecording == true
+        ioProcID != nil
     }
 
     func startRecording(to url: URL) throws {
         stopRecording()
 
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 48_000,
-            AVNumberOfChannelsKey: 2,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
+        do {
+            guard let device = try system.defaultInputDevice else {
+                throw AudioRecordingError.noDefaultInputDevice
+            }
 
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
-        recorder.isMeteringEnabled = true
-        recorder.prepareToRecord()
+            let inputFormat = try inputFormat(for: device)
+            let writer = try AudioBufferListFileWriter(outputURL: url, inputFormat: inputFormat)
+            self.device = device
+            self.writer = writer
 
-        guard recorder.record() else {
-            throw AudioRecordingError.couldNotStart
+            var ioProcID: AudioDeviceIOProcID?
+            let createStatus = AudioDeviceCreateIOProcIDWithBlock(
+                &ioProcID,
+                device.id,
+                ioQueue
+            ) { [weak self] _, inputData, _, _, _ in
+                self?.writer?.write(inputData: inputData)
+            }
+
+            guard createStatus == noErr, let ioProcID else {
+                throw CoreAudioStatusError(status: createStatus, operation: "create microphone IOProc")
+            }
+
+            let startStatus = AudioDeviceStart(device.id, ioProcID)
+            guard startStatus == noErr else {
+                AudioDeviceDestroyIOProcID(device.id, ioProcID)
+                throw CoreAudioStatusError(status: startStatus, operation: "start microphone IOProc")
+            }
+
+            self.ioProcID = ioProcID
+            self.startedAt = Date()
+        } catch {
+            stopRecording()
+            throw error
         }
-
-        self.recorder = recorder
-        self.startedAt = Date()
     }
 
     @discardableResult
     func stopRecording() -> TimeInterval {
-        guard let recorder else {
-            return 0
+        if let device, let ioProcID {
+            AudioDeviceStop(device.id, ioProcID)
+            AudioDeviceDestroyIOProcID(device.id, ioProcID)
         }
 
-        recorder.stop()
-        self.recorder = nil
-
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
+        device = nil
+        ioProcID = nil
+        writer = nil
         startedAt = nil
         return duration
+    }
+
+    private func inputFormat(for device: AudioHardwareDevice) throws -> AVAudioFormat {
+        let streams = try device.streams
+
+        for stream in streams where (try? stream.direction) == .input {
+            var streamDescription = try stream.virtualFormat
+            if let format = AVAudioFormat(streamDescription: &streamDescription),
+               format.channelCount > 0 {
+                return format
+            }
+        }
+
+        throw AudioRecordingError.unsupportedFormat
     }
 }
 
 enum AudioRecordingError: LocalizedError {
-    case couldNotStart
+    case noDefaultInputDevice
+    case unsupportedFormat
 
     var errorDescription: String? {
         switch self {
-        case .couldNotStart:
+        case .noDefaultInputDevice:
+            "Wiretap could not find a default microphone input device."
+        case .unsupportedFormat:
             "Wiretap could not start recording from the default microphone."
         }
     }

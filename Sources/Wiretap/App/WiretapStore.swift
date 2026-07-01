@@ -24,6 +24,7 @@ final class WiretapStore {
     @ObservationIgnored private let playbackController: AudioPlaybackController
     @ObservationIgnored private let systemAudioTap: SystemAudioTap
     @ObservationIgnored private let mixerWriter: AudioMixerWriter
+    @ObservationIgnored private let permissionManager: PermissionManager
     @ObservationIgnored private var activeRecordingID: Recording.ID?
     @ObservationIgnored private var activeFinalURL: URL?
     @ObservationIgnored private var activeMicrophoneURL: URL?
@@ -35,7 +36,8 @@ final class WiretapStore {
         microphoneRecorder: MicrophoneRecorder = MicrophoneRecorder(),
         playbackController: AudioPlaybackController = AudioPlaybackController(),
         systemAudioTap: SystemAudioTap = SystemAudioTap(),
-        mixerWriter: AudioMixerWriter = AudioMixerWriter()
+        mixerWriter: AudioMixerWriter = AudioMixerWriter(),
+        permissionManager: PermissionManager = PermissionManager()
     ) {
         self.recordings = recordings
         self.selectedRecordingID = recordings.first?.id
@@ -44,6 +46,7 @@ final class WiretapStore {
         self.playbackController = playbackController
         self.systemAudioTap = systemAudioTap
         self.mixerWriter = mixerWriter
+        self.permissionManager = permissionManager
     }
 
     var filteredRecordings: [Recording] {
@@ -100,6 +103,8 @@ final class WiretapStore {
     }
 
     func loadLibrary() {
+        permissionState = permissionManager.currentState()
+
         do {
             recordings = try repository.loadRecordings()
             selectedRecordingID = recordings.first?.id
@@ -117,6 +122,8 @@ final class WiretapStore {
     }
 
     func startRecording() {
+        permissionState = permissionManager.currentState()
+
         guard canRecord else {
             notice = WiretapNotice(
                 title: "Permissions Denied",
@@ -310,6 +317,22 @@ final class WiretapStore {
     func markPermissionsReviewed() {
         permissionState = .ready
         isOnboardingPresented = false
+    }
+
+    func requestPermissions() async {
+        permissionState = await permissionManager.requestMicrophoneAccess()
+        isOnboardingPresented = false
+
+        if permissionState == .denied {
+            notice = WiretapNotice(
+                title: "Microphone Access Denied",
+                message: "Open System Settings to allow microphone access before recording."
+            )
+        }
+    }
+
+    func openPermissionSettings() {
+        permissionManager.openPrivacySettings()
     }
 
     private func saveLibrary() {

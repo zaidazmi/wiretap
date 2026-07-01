@@ -54,10 +54,19 @@ struct OnboardingView: View {
                 }
 
                 Button("Continue") {
-                    store.markPermissionsReviewed()
-                    dismiss()
+                    Task {
+                        await store.requestPermissions()
+                        dismiss()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+
+                if store.permissionState == .denied {
+                    Button("Open Settings") {
+                        store.openPermissionSettings()
+                        dismiss()
+                    }
+                }
             }
         }
         .padding(28)

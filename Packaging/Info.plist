@@ -2,15 +2,35 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key>
-    <string>dev.zaidazmi.Wiretap</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
     <key>CFBundleDisplayName</key>
     <string>Wiretap</string>
+    <key>CFBundleExecutable</key>
+    <string>Wiretap</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.zaidazmi.Wiretap</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Wiretap</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Wiretap records system output audio into a local audio file when you start recording.</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Wiretap records the current default microphone into the same local audio file when you start recording.</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
 </dict>
 </plist>

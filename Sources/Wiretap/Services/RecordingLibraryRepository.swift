@@ -5,7 +5,7 @@ struct RecordingLibraryRepository {
 
     init(
         fileManager: FileManager = .default,
-        appDirectoryName: String = "Wiretap",
+        appDirectoryName: String = Bundle.main.bundleIdentifier ?? "dev.zaidazmi.Wiretap",
         applicationSupportDirectory: URL? = nil
     ) {
         if let applicationSupportDirectory {

@@ -136,6 +136,7 @@ private struct MenuCaptureSources: View {
                 Text(permissionState.title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Spacer()
             }
         }
     }

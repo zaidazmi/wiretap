@@ -2,7 +2,14 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-final class SystemAudioTap {
+protocol SystemAudioTapping: AnyObject {
+    var isRunning: Bool { get }
+
+    func start(writingTo outputURL: URL) throws
+    func stop()
+}
+
+final class SystemAudioTap: SystemAudioTapping {
     private let system = AudioHardwareSystem.shared
     private let ioQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.system-audio-tap", qos: .userInitiated)
     private var tap: AudioHardwareTap?

@@ -2,7 +2,19 @@ import AVFoundation
 import Foundation
 
 @MainActor
-final class AudioPlaybackController {
+protocol AudioPlaybackControlling: AnyObject {
+    var recordingID: Recording.ID? { get }
+    var isPlaying: Bool { get }
+    var currentTime: TimeInterval { get }
+    var duration: TimeInterval { get }
+
+    func toggle(recording: Recording) throws
+    func seek(to progress: Double)
+    func stop()
+}
+
+@MainActor
+final class AudioPlaybackController: AudioPlaybackControlling {
     private var player: AVAudioPlayer?
     private(set) var recordingID: Recording.ID?
 
@@ -29,6 +41,9 @@ final class AudioPlaybackController {
             if player.isPlaying {
                 player.pause()
             } else {
+                if player.currentTime >= player.duration {
+                    player.currentTime = 0
+                }
                 player.play()
             }
             return

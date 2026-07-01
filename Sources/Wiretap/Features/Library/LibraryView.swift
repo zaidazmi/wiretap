@@ -53,8 +53,8 @@ struct LibraryView: View {
                 )
             }
         }
-        .task(id: store.isRecording) {
-            while store.isRecording {
+        .task(id: store.isTimelineActive) {
+            while store.isTimelineActive {
                 store.tick()
                 try? await Task.sleep(for: .seconds(1))
             }

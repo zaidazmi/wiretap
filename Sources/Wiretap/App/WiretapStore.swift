@@ -84,6 +84,14 @@ private enum RecordingStopReason {
     }
 }
 
+private struct RecordingStartFailure: LocalizedError {
+    let notice: WiretapNotice
+
+    var errorDescription: String? {
+        notice.message
+    }
+}
+
 @MainActor
 @Observable
 final class WiretapStore {
@@ -104,9 +112,9 @@ final class WiretapStore {
     var microphoneState: CaptureSourceState = .notChecked
 
     @ObservationIgnored private let repository: RecordingLibraryRepository
-    @ObservationIgnored private let microphoneRecorder: MicrophoneRecorder
-    @ObservationIgnored private let playbackController: AudioPlaybackController
-    @ObservationIgnored private let systemAudioTap: SystemAudioTap
+    @ObservationIgnored private let microphoneRecorder: any MicrophoneRecording
+    @ObservationIgnored private let playbackController: any AudioPlaybackControlling
+    @ObservationIgnored private let systemAudioTap: any SystemAudioTapping
     @ObservationIgnored private let mixerWriter: AudioMixerWriter
     @ObservationIgnored private let permissionManager: PermissionManager
     @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
@@ -120,9 +128,9 @@ final class WiretapStore {
     init(
         recordings: [Recording] = [],
         repository: RecordingLibraryRepository = RecordingLibraryRepository(),
-        microphoneRecorder: MicrophoneRecorder = MicrophoneRecorder(),
-        playbackController: AudioPlaybackController = AudioPlaybackController(),
-        systemAudioTap: SystemAudioTap = SystemAudioTap(),
+        microphoneRecorder: any MicrophoneRecording = MicrophoneRecorder(),
+        playbackController: any AudioPlaybackControlling = AudioPlaybackController(),
+        systemAudioTap: any SystemAudioTapping = SystemAudioTap(),
         mixerWriter: AudioMixerWriter = AudioMixerWriter(),
         permissionManager: PermissionManager = PermissionManager(),
         minimumFreeDiskSpaceBytes: Int64 = 1_000_000_000
@@ -215,6 +223,10 @@ final class WiretapStore {
         permissionState != .denied
     }
 
+    var isTimelineActive: Bool {
+        isRecording || isPlaying
+    }
+
     func loadLibrary() {
         permissionState = permissionManager.currentState()
         microphoneState = microphoneCaptureState(for: permissionState)
@@ -292,13 +304,7 @@ final class WiretapStore {
                 activeSourceStartDates[.systemAudio] = Date()
             } catch {
                 systemAudioState = .unavailable
-                notice = WiretapNotice(
-                    title: SystemAudioTapError.isPermissionDenied(error)
-                        ? "System Audio Permission Needed"
-                        : "System Audio Unavailable",
-                    message: systemAudioFailureMessage(for: error),
-                    recovery: SystemAudioTapError.isPermissionDenied(error) ? .systemAudioSettings : nil
-                )
+                throw RecordingStartFailure(notice: systemAudioStartFailureNotice(for: error))
             }
             try microphoneRecorder.startRecording(to: microphoneURL)
             microphoneState = .ready
@@ -333,7 +339,6 @@ final class WiretapStore {
         } catch {
             microphoneRecorder.stopRecording()
             systemAudioTap.stop()
-            microphoneState = .unavailable
             repository.deleteTemporaryFiles(cleanupURLs)
             if let pendingRecordingID {
                 recordings.removeAll { $0.id == pendingRecordingID }
@@ -341,7 +346,12 @@ final class WiretapStore {
                 try? persistLibrary()
             }
             resetRecordingState()
-            notice = WiretapNotice(title: "Recording Error", message: error.localizedDescription)
+            if let failure = error as? RecordingStartFailure {
+                notice = failure.notice
+            } else {
+                microphoneState = .unavailable
+                notice = WiretapNotice(title: "Recording Error", message: error.localizedDescription)
+            }
         }
     }
 
@@ -790,12 +800,19 @@ private extension WiretapStore {
         }
     }
 
-    func systemAudioFailureMessage(for error: Error) -> String {
+    func systemAudioStartFailureNotice(for error: Error) -> WiretapNotice {
         if SystemAudioTapError.isPermissionDenied(error) {
-            return "Microphone recording will continue. Open Privacy & Security settings, allow Wiretap under Audio Capture if macOS lists it, then retry recording."
+            return WiretapNotice(
+                title: "System Audio Permission Needed",
+                message: "Recording was not started because Wiretap needs Audio Capture permission to include system audio. Open Privacy & Security settings, allow Wiretap under Audio Capture if macOS lists it, then retry recording.",
+                recovery: .systemAudioSettings
+            )
         }
 
-        return "Microphone recording will continue. System-audio tap setup failed: \(error.localizedDescription)"
+        return WiretapNotice(
+            title: "System Audio Unavailable",
+            message: "Recording was not started because the system-audio tap could not be created: \(error.localizedDescription)"
+        )
     }
 }
 

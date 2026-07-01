@@ -110,6 +110,64 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testStartRecordingDoesNotFallbackToMicrophoneOnlyWhenSystemAudioPermissionFails() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap(startError: SystemAudioTapError.permissionDenied)
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+
+        XCTAssertFalse(store.isRecording)
+        XCTAssertTrue(store.recordings.isEmpty)
+        XCTAssertTrue(try repository.loadRecordings().isEmpty)
+        XCTAssertEqual(systemAudioTap.startCallCount, 1)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 0)
+        XCTAssertEqual(store.systemAudioState, .unavailable)
+        XCTAssertEqual(store.notice?.title, "System Audio Permission Needed")
+        XCTAssertEqual(store.notice?.recovery, .systemAudioSettings)
+    }
+
+    @MainActor
+    func testTickSynchronizesPlaybackTimeline() {
+        let recording = makeRecording(title: "Playback")
+        let playbackController = FakePlaybackController()
+        playbackController.recordingID = recording.id
+        playbackController.isPlaying = true
+        playbackController.currentTime = 12
+        playbackController.duration = 30
+        let store = WiretapStore(
+            recordings: [recording],
+            playbackController: playbackController,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.tick()
+
+        XCTAssertEqual(store.playbackRecordingID, recording.id)
+        XCTAssertTrue(store.isPlaying)
+        XCTAssertEqual(store.playbackTime, 12)
+        XCTAssertEqual(store.playbackDuration, 30)
+        XCTAssertEqual(store.playbackProgress(for: recording), 0.4, accuracy: 0.001)
+        XCTAssertTrue(store.isTimelineActive)
+
+        playbackController.isPlaying = false
+        playbackController.currentTime = 30
+
+        store.tick()
+
+        XCTAssertFalse(store.isPlaying)
+        XCTAssertFalse(store.isTimelineActive)
+        XCTAssertEqual(store.playbackProgress(for: recording), 1)
+    }
+
+    @MainActor
     func testSelectedRecordingFollowsSearchFilter() {
         let designRecording = makeRecording(title: "Design Review")
         let interviewRecording = makeRecording(title: "Customer Interview")
@@ -192,5 +250,84 @@ final class WiretapStoreTests: XCTestCase {
             sourceSummary: "System audio + default microphone",
             status: status
         )
+    }
+}
+
+@MainActor
+private final class FakePlaybackController: AudioPlaybackControlling {
+    var recordingID: Recording.ID?
+    var isPlaying = false
+    var currentTime: TimeInterval = 0
+    var duration: TimeInterval = 0
+
+    func toggle(recording: Recording) throws {
+        recordingID = recording.id
+        isPlaying.toggle()
+    }
+
+    func seek(to progress: Double) {
+        currentTime = duration * max(0, min(1, progress))
+    }
+
+    func stop() {
+        recordingID = nil
+        isPlaying = false
+        currentTime = 0
+        duration = 0
+    }
+}
+
+private final class FakeSystemAudioTap: SystemAudioTapping {
+    var isRunning = false
+    var startCallCount = 0
+    var stopCallCount = 0
+    let startError: Error?
+
+    init(startError: Error? = nil) {
+        self.startError = startError
+    }
+
+    func start(writingTo outputURL: URL) throws {
+        startCallCount += 1
+
+        if let startError {
+            throw startError
+        }
+
+        isRunning = true
+    }
+
+    func stop() {
+        stopCallCount += 1
+        isRunning = false
+    }
+}
+
+private final class FakeMicrophoneRecorder: MicrophoneRecording {
+    var isRecording = false
+    var startCallCount = 0
+    var stopCallCount = 0
+    var stopDuration: TimeInterval = 0
+    let startError: Error?
+
+    init(startError: Error? = nil) {
+        self.startError = startError
+    }
+
+    func startRecording(to url: URL) throws {
+        startCallCount += 1
+
+        if let startError {
+            throw startError
+        }
+
+        isRecording = true
+    }
+
+    @discardableResult
+    func stopRecording() -> TimeInterval {
+        stopCallCount += 1
+        isRecording = false
+        return stopDuration
     }
 }

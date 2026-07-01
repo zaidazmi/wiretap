@@ -2,7 +2,14 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-final class MicrophoneRecorder {
+protocol MicrophoneRecording: AnyObject {
+    var isRecording: Bool { get }
+
+    func startRecording(to url: URL) throws
+    @discardableResult func stopRecording() -> TimeInterval
+}
+
+final class MicrophoneRecorder: MicrophoneRecording {
     private let system = AudioHardwareSystem.shared
     private let ioQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.microphone-recorder", qos: .userInitiated)
     private var device: AudioHardwareDevice?

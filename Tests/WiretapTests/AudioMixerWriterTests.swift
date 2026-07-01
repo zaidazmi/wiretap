@@ -23,6 +23,34 @@ final class AudioMixerWriterTests: XCTestCase {
         temporaryDirectory = nil
     }
 
+    func testSampleLimiterScalesEntireBlockWhenPeakExceedsCeiling() throws {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ),
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 2),
+            let channels = buffer.floatChannelData
+        else {
+            XCTFail("Could not create limiter test buffer")
+            return
+        }
+
+        buffer.frameLength = 2
+        channels[0][0] = 1.2
+        channels[0][1] = -0.6
+        channels[1][0] = 0.4
+        channels[1][1] = -2.0
+
+        AudioSampleLimiter(ceiling: 0.95).apply(to: buffer)
+
+        XCTAssertEqual(channels[0][0], 0.57, accuracy: 0.001)
+        XCTAssertEqual(channels[0][1], -0.285, accuracy: 0.001)
+        XCTAssertEqual(channels[1][0], 0.19, accuracy: 0.001)
+        XCTAssertEqual(channels[1][1], -0.95, accuracy: 0.001)
+    }
+
     func testMixCombinesSourcesIntoSingleM4A() async throws {
         let systemURL = temporaryDirectory.appendingPathComponent("system.m4a")
         let micURL = temporaryDirectory.appendingPathComponent("microphone.m4a")
@@ -53,6 +81,29 @@ final class AudioMixerWriterTests: XCTestCase {
         )!.pointee
         XCTAssertEqual(streamDescription.mSampleRate, 48_000, accuracy: 1)
         XCTAssertEqual(streamDescription.mChannelsPerFrame, 2)
+    }
+
+    func testMixLimitsSummedPeaks() async throws {
+        let systemURL = temporaryDirectory.appendingPathComponent("loud-system.m4a")
+        let micURL = temporaryDirectory.appendingPathComponent("loud-microphone.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("limited.m4a")
+        try writeTone(to: systemURL, duration: 0.2, frequency: 440, amplitude: 0.95)
+        try writeTone(to: micURL, duration: 0.2, frequency: 440, amplitude: 0.95)
+
+        let result = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: systemURL, source: .systemAudio),
+                AudioMixerInput(url: micURL, source: .microphone)
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertEqual(result.duration, 0.2, accuracy: 0.03)
+        XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: outputURL), 1.02)
+        XCTAssertGreaterThan(
+            try averageAbsoluteAmplitude(in: outputURL, from: 0.02, duration: 0.12),
+            0.30
+        )
     }
 
     func testMixIgnoresInputWithoutAudioTrack() async throws {
@@ -92,6 +143,21 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertLessThan(result.duration, 0.6)
     }
 
+    func testMixDurationMatchesOffsetTimeline() async throws {
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-timeline.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("mixed-timeline.m4a")
+        try writeTone(to: micURL, duration: 0.16, frequency: 660)
+
+        let result = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: micURL, source: .microphone, startOffset: 0.24)
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertEqual(result.duration, 0.40, accuracy: 0.03)
+    }
+
     func testMixHonorsInputStartOffset() async throws {
         let micURL = temporaryDirectory.appendingPathComponent("microphone-offset.m4a")
         let outputURL = temporaryDirectory.appendingPathComponent("mixed-offset.m4a")
@@ -105,6 +171,7 @@ final class AudioMixerWriterTests: XCTestCase {
         )
 
         XCTAssertGreaterThan(result.duration, 0.35)
+        XCTAssertLessThan(result.duration, 0.45)
 
         let initialAmplitude = try averageAbsoluteAmplitude(
             in: outputURL,
@@ -134,6 +201,7 @@ final class AudioMixerWriterTests: XCTestCase {
         )
 
         XCTAssertGreaterThan(result.duration, 0.28)
+        XCTAssertEqual(result.duration, 0.32, accuracy: 0.03)
 
         let lateAmplitude = try averageAbsoluteAmplitude(
             in: outputURL,
@@ -144,8 +212,13 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertGreaterThan(lateAmplitude, 0.02)
     }
 
-    private func writeTone(to url: URL, duration: TimeInterval, frequency: Double) throws {
-        let sampleRate = 48_000.0
+    private func writeTone(
+        to url: URL,
+        duration: TimeInterval,
+        frequency: Double,
+        amplitude: Double = 0.2,
+        sampleRate: Double = 48_000.0
+    ) throws {
         let channelCount: AVAudioChannelCount = 2
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -168,7 +241,7 @@ final class AudioMixerWriterTests: XCTestCase {
         buffer.frameLength = frameCount
 
         for frame in 0..<Int(frameCount) {
-            let sample = Float(sin(2 * Double.pi * frequency * Double(frame) / sampleRate) * 0.2)
+            let sample = Float(sin(2 * Double.pi * frequency * Double(frame) / sampleRate) * amplitude)
             for channel in 0..<Int(channelCount) {
                 channels[channel][frame] = sample
             }
@@ -221,5 +294,32 @@ final class AudioMixerWriterTests: XCTestCase {
         }
 
         return sampleCount > 0 ? total / Float(sampleCount) : 0
+    }
+
+    private func peakAbsoluteAmplitude(in url: URL) throws -> Float {
+        let file = try AVAudioFile(
+            forReading: url,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: file.processingFormat,
+            frameCapacity: AVAudioFrameCount(file.length)
+        ) else {
+            XCTFail("Could not create read buffer")
+            return 0
+        }
+
+        try file.read(into: buffer)
+        guard let channelData = buffer.floatChannelData else { return 0 }
+
+        var peak: Float = 0
+        for channel in 0..<Int(buffer.format.channelCount) {
+            for frame in 0..<Int(buffer.frameLength) {
+                peak = max(peak, abs(channelData[channel][frame]))
+            }
+        }
+
+        return peak
     }
 }

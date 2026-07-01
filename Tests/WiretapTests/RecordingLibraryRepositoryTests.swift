@@ -291,6 +291,75 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         ))
     }
 
+    func testRefreshedFileStatusesRecoversExistingFolderForActiveRow() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let finalURL = try repository.recordingURL(for: id)
+        let recoveryURL = try repository.recoveryURL(for: id)
+        try FileManager.default.createDirectory(
+            at: recoveryURL,
+            withIntermediateDirectories: true
+        )
+        let retainedSourceURL = recoveryURL.appendingPathComponent("\(id.uuidString)-microphone.m4a")
+        try Data("retained mic".utf8).write(to: retainedSourceURL)
+        let activeRecording = Recording(
+            id: id,
+            title: "Active",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 0,
+            fileURL: finalURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .recording
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [activeRecording])
+
+        XCTAssertEqual(refreshed.first?.status, .interrupted)
+        XCTAssertNil(refreshed.first?.fileURL)
+        XCTAssertEqual(refreshed.first?.recoveryFolderURL, recoveryURL)
+        XCTAssertEqual(
+            refreshed.first?.sourceSummary,
+            RecordingInterruptionReason.unexpectedShutdown.recoverySummary
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedSourceURL.path))
+    }
+
+    func testRefreshedFileStatusesRestoresExistingFolderForInterruptedRow() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let recoveryURL = try repository.recoveryURL(for: id)
+        try FileManager.default.createDirectory(
+            at: recoveryURL,
+            withIntermediateDirectories: true
+        )
+        try Data("retained system".utf8).write(
+            to: recoveryURL.appendingPathComponent("\(id.uuidString)-system.m4a")
+        )
+        let interruptedRecording = Recording(
+            id: id,
+            title: "Interrupted",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 4,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "Interrupted - recording could not be recovered",
+            status: .interrupted
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [interruptedRecording])
+
+        XCTAssertEqual(refreshed.first?.status, .interrupted)
+        XCTAssertEqual(refreshed.first?.recoveryFolderURL, recoveryURL)
+        XCTAssertEqual(
+            refreshed.first?.sourceSummary,
+            RecordingInterruptionReason.unexpectedShutdown.recoverySummary
+        )
+    }
+
     func testRetainTemporaryFilesMovesSourcesAndDeleteRemovesRecoveryFolder() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()

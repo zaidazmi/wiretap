@@ -107,10 +107,11 @@ struct RecordingLibraryRepository {
                     return refreshed
                 }
 
-                let recoveryFolderURL = try? retainTemporaryFiles(
-                    temporarySourceURLs(for: recording.id),
-                    for: recording.id
-                )
+                let recoveryFolderURL = existingRecoveryFolderIfPresent(for: recording.id)
+                    ?? (try? retainTemporaryFiles(
+                        temporarySourceURLs(for: recording.id),
+                        for: recording.id
+                    ))
                 refreshed.status = .interrupted
                 refreshed.fileURL = nil
                 refreshed.recoveryFolderURL = recoveryFolderURL
@@ -121,6 +122,11 @@ struct RecordingLibraryRepository {
                     : RecordingInterruptionReason.unexpectedShutdown.recoverySummary
 
             case .interrupted:
+                if refreshed.recoveryFolderURL == nil,
+                   let recoveryFolderURL = existingRecoveryFolderIfPresent(for: recording.id) {
+                    refreshed.recoveryFolderURL = recoveryFolderURL
+                    refreshed.sourceSummary = RecordingInterruptionReason.unexpectedShutdown.recoverySummary
+                }
                 break
             }
 
@@ -237,6 +243,21 @@ struct RecordingLibraryRepository {
         ["system", "microphone"].compactMap { source in
             try? temporarySourceURL(for: id, source: source)
         }
+    }
+
+    private func existingRecoveryFolderIfPresent(for id: Recording.ID) -> URL? {
+        guard let recoveryURL = try? recoveryURL(for: id),
+              FileManager.default.fileExists(atPath: recoveryURL.path),
+              let contents = try? FileManager.default.contentsOfDirectory(
+                at: recoveryURL,
+                includingPropertiesForKeys: nil
+              ),
+              !contents.isEmpty
+        else {
+            return nil
+        }
+
+        return recoveryURL
     }
 
     private func makeModelContext() throws -> ModelContext {

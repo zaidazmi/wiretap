@@ -22,6 +22,7 @@ final class WiretapStore {
     @ObservationIgnored private let repository: RecordingLibraryRepository
     @ObservationIgnored private let microphoneRecorder: MicrophoneRecorder
     @ObservationIgnored private let playbackController: AudioPlaybackController
+    @ObservationIgnored private let systemAudioTap: SystemAudioTap
     @ObservationIgnored private var activeRecordingID: Recording.ID?
     @ObservationIgnored private var activeRecordingURL: URL?
 
@@ -29,13 +30,15 @@ final class WiretapStore {
         recordings: [Recording] = [],
         repository: RecordingLibraryRepository = RecordingLibraryRepository(),
         microphoneRecorder: MicrophoneRecorder = MicrophoneRecorder(),
-        playbackController: AudioPlaybackController = AudioPlaybackController()
+        playbackController: AudioPlaybackController = AudioPlaybackController(),
+        systemAudioTap: SystemAudioTap = SystemAudioTap()
     ) {
         self.recordings = recordings
         self.selectedRecordingID = recordings.first?.id
         self.repository = repository
         self.microphoneRecorder = microphoneRecorder
         self.playbackController = playbackController
+        self.systemAudioTap = systemAudioTap
     }
 
     var filteredRecordings: [Recording] {
@@ -120,6 +123,14 @@ final class WiretapStore {
         do {
             let id = UUID()
             let url = try repository.recordingURL(for: id)
+            do {
+                try systemAudioTap.start()
+            } catch {
+                notice = WiretapNotice(
+                    title: "System Audio Pending",
+                    message: "Microphone recording will continue. System-audio tap setup failed: \(error.localizedDescription)"
+                )
+            }
             try microphoneRecorder.startRecording(to: url)
 
             activeRecordingID = id
@@ -137,6 +148,7 @@ final class WiretapStore {
         guard isRecording else { return }
 
         let measuredDuration = microphoneRecorder.stopRecording()
+        systemAudioTap.stop()
         let duration = max(elapsedSeconds, measuredDuration, 1)
         let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
 

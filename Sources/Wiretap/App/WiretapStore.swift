@@ -149,7 +149,7 @@ final class WiretapStore {
 
     var selectedRecording: Recording? {
         guard let selectedRecordingID else { return filteredRecordings.first }
-        return recordings.first { $0.id == selectedRecordingID }
+        return filteredRecordings.first { $0.id == selectedRecordingID } ?? filteredRecordings.first
     }
 
     var elapsedText: String {

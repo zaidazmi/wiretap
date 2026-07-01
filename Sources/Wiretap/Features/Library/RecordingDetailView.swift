@@ -2,20 +2,21 @@ import SwiftUI
 
 struct RecordingDetailView: View {
     let recording: Recording
-    @Binding var playbackState: RecordingPlaybackState
-    let actions: RecordingFileActions
+    @Bindable var store: WiretapStore
+    @State private var playbackPosition = 0.34
+    @State private var isPlaying = false
+    @State private var isConfirmingDelete = false
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     detailHeader
-
                     PlayerControlsView(
-                        recording: recording,
-                        playbackState: $playbackState
+                        isPlaying: $isPlaying,
+                        playbackPosition: $playbackPosition,
+                        durationText: recording.durationText
                     )
-
                     MetadataGrid(recording: recording)
                 }
                 .padding(28)
@@ -24,17 +25,39 @@ struct RecordingDetailView: View {
 
             Divider()
 
-            RecordingActionBar(actions: actions)
+            RecordingActionBar(
+                onReveal: {},
+                onExport: {},
+                onShare: {},
+                onDelete: { isConfirmingDelete = true }
+            )
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .confirmationDialog(
+            "Delete Recording?",
+            isPresented: $isConfirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                store.deleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the library item and its local audio file.")
+        }
     }
 
     private var detailHeader: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(recording.title)
-                .font(.largeTitle.weight(.semibold))
-                .lineLimit(2)
-                .textSelection(.enabled)
+            TextField(
+                "Recording title",
+                text: Binding(
+                    get: { recording.title },
+                    set: { store.renameSelected(to: $0) }
+                )
+            )
+            .textFieldStyle(.plain)
+            .font(.largeTitle.weight(.semibold))
 
             HStack(spacing: 12) {
                 Label {
@@ -42,7 +65,7 @@ struct RecordingDetailView: View {
                 } icon: {
                     Image(systemName: "calendar")
                 }
-                Label(recording.sourceSummary, systemImage: "mic")
+                Label(recording.sourceSummary, systemImage: "waveform")
                 Label(recording.technicalSummary, systemImage: "slider.horizontal.3")
             }
             .font(.callout)
@@ -52,83 +75,45 @@ struct RecordingDetailView: View {
 }
 
 private struct PlayerControlsView: View {
-    let recording: Recording
-    @Binding var playbackState: RecordingPlaybackState
+    @Binding var isPlaying: Bool
+    @Binding var playbackPosition: Double
+    let durationText: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(spacing: 16) {
             HStack(spacing: 14) {
                 Button {
-                    playbackState.currentTime = max(0, playbackState.currentTime - 15)
+                    isPlaying.toggle()
                 } label: {
-                    Image(systemName: "gobackward.15")
-                        .frame(width: 24, height: 24)
-                }
-                .help("Skip back 15 seconds")
-
-                Button {
-                    playbackState.isPlaying.toggle()
-                } label: {
-                    Image(systemName: playbackState.isPlaying ? "pause.fill" : "play.fill")
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                         .font(.title3)
                         .frame(width: 42, height: 42)
                 }
                 .buttonStyle(.borderedProminent)
                 .clipShape(Circle())
-                .help(playbackState.isPlaying ? "Pause" : "Play")
-
-                Button {
-                    playbackState.currentTime = min(recording.duration, playbackState.currentTime + 15)
-                } label: {
-                    Image(systemName: "goforward.15")
-                        .frame(width: 24, height: 24)
-                }
-                .help("Skip forward 15 seconds")
+                .help(isPlaying ? "Pause" : "Play")
 
                 VStack(spacing: 8) {
-                    Slider(value: currentTime, in: 0...max(recording.duration, 1))
+                    Slider(value: $playbackPosition, in: 0...1)
                         .accessibilityLabel("Playback position")
 
                     HStack {
-                        Text(DurationFormatter.clock.string(from: playbackState.currentTime))
+                        Text(progressText)
                         Spacer()
-                        Text(recording.durationText)
+                        Text(durationText)
                     }
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 }
-            }
-
-            HStack(spacing: 22) {
-                HStack(spacing: 8) {
-                    Image(systemName: "speaker.wave.2")
-                        .foregroundStyle(.secondary)
-
-                    Slider(value: $playbackState.volume, in: 0...1)
-                        .frame(maxWidth: 180)
-                        .accessibilityLabel("Playback volume")
-                }
-
-                Picker("Speed", selection: $playbackState.speed) {
-                    ForEach(RecordingPlaybackSpeed.allCases) { speed in
-                        Text(speed.title).tag(speed)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 240)
-
-                Spacer()
             }
         }
         .padding(18)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private var currentTime: Binding<Double> {
-        Binding(
-            get: { min(playbackState.currentTime, recording.duration) },
-            set: { playbackState.currentTime = min(max(0, $0), recording.duration) }
-        )
+    private var progressText: String {
+        let seconds = playbackPosition * 60
+        return DurationFormatter.clock.string(from: seconds)
     }
 }
 
@@ -145,12 +130,7 @@ private struct MetadataGrid: View {
                 MetadataItem(title: "Format", value: "AAC .m4a", systemImage: "music.note")
                 MetadataItem(title: "Status", value: recording.status.label, systemImage: "checkmark.seal")
             }
-            GridRow {
-                MetadataItem(title: "Source", value: recording.sourceSummary, systemImage: "mic")
-                MetadataItem(title: "Location", value: recording.folderPath, systemImage: "folder")
-            }
         }
-        .textSelection(.enabled)
     }
 }
 
@@ -171,7 +151,6 @@ private struct MetadataItem: View {
                     .foregroundStyle(.secondary)
                 Text(value)
                     .font(.callout)
-                    .lineLimit(2)
             }
         }
         .frame(minWidth: 220, alignment: .leading)
@@ -179,26 +158,26 @@ private struct MetadataItem: View {
 }
 
 private struct RecordingActionBar: View {
-    let actions: RecordingFileActions
+    let onReveal: () -> Void
+    let onExport: () -> Void
+    let onShare: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Button(action: actions.rename) {
-                Label("Rename", systemImage: "pencil")
-            }
-            Button(action: actions.reveal) {
+            Button(action: onReveal) {
                 Label("Reveal", systemImage: "folder")
             }
-            Button(action: actions.export) {
+            Button(action: onExport) {
                 Label("Export", systemImage: "square.and.arrow.down")
             }
-            Button(action: actions.share) {
+            Button(action: onShare) {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
 
             Spacer()
 
-            Button(role: .destructive, action: actions.delete) {
+            Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
         }
@@ -207,18 +186,6 @@ private struct RecordingActionBar: View {
 }
 
 #Preview {
-    @Previewable @State var playbackState = RecordingPlaybackState()
-
-    RecordingDetailView(
-        recording: Recording.previewRecordings[0],
-        playbackState: $playbackState,
-        actions: RecordingFileActions(
-            rename: {},
-            reveal: {},
-            export: {},
-            share: {},
-            delete: {}
-        )
-    )
-    .frame(width: 760, height: 620)
+    RecordingDetailView(recording: Recording.previewRecordings[0], store: .preview)
+        .frame(width: 760, height: 620)
 }

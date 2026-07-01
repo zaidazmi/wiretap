@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreAudio
 import Foundation
 
@@ -7,12 +8,14 @@ final class SystemAudioTap {
     private var tap: AudioHardwareTap?
     private var aggregateDevice: AudioHardwareAggregateDevice?
     private var ioProcID: AudioDeviceIOProcID?
+    private var inputFormat: AVAudioFormat?
+    private var audioFile: AVAudioFile?
 
     var isRunning: Bool {
         ioProcID != nil
     }
 
-    func start() throws {
+    func start(writingTo outputURL: URL) throws {
         guard !isRunning else { return }
 
         do {
@@ -25,6 +28,21 @@ final class SystemAudioTap {
             guard let tap = try system.makeProcessTap(description: tapDescription) else {
                 throw SystemAudioTapError.tapCreationFailed
             }
+
+            var streamDescription = try tap.format
+            guard let inputFormat = AVAudioFormat(streamDescription: &streamDescription) else {
+                try system.destroyProcessTap(tap)
+                throw SystemAudioTapError.unsupportedFormat
+            }
+
+            let channelCount = max(1, Int(inputFormat.channelCount))
+            let outputSettings: [String: Any] = [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: inputFormat.sampleRate,
+                AVNumberOfChannelsKey: channelCount,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+            let audioFile = try AVAudioFile(forWriting: outputURL, settings: outputSettings)
 
             let aggregateDescription: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "Wiretap System Audio Device",
@@ -44,8 +62,8 @@ final class SystemAudioTap {
                 &ioProcID,
                 aggregateDevice.id,
                 ioQueue
-            ) { _, _, _, _, _ in
-                // Buffer routing into AudioMixerWriter is the next capture slice.
+            ) { [weak self] _, inputData, _, _, _ in
+                self?.write(inputData: inputData)
             }
 
             guard createStatus == noErr, let ioProcID else {
@@ -65,6 +83,8 @@ final class SystemAudioTap {
             self.tap = tap
             self.aggregateDevice = aggregateDevice
             self.ioProcID = ioProcID
+            self.inputFormat = inputFormat
+            self.audioFile = audioFile
         } catch {
             stop()
             throw error
@@ -88,6 +108,8 @@ final class SystemAudioTap {
         ioProcID = nil
         aggregateDevice = nil
         tap = nil
+        inputFormat = nil
+        audioFile = nil
     }
 
     private func currentProcessExclusionList() throws -> [AudioObjectID] {
@@ -97,11 +119,35 @@ final class SystemAudioTap {
 
         return []
     }
+
+    private func write(inputData: UnsafePointer<AudioBufferList>) {
+        guard let inputFormat,
+              let audioFile,
+              let firstBuffer = UnsafeMutableAudioBufferListPointer(
+                UnsafeMutablePointer(mutating: inputData)
+              ).first
+        else { return }
+
+        let streamDescription = inputFormat.streamDescription.pointee
+        let bytesPerFrame = max(1, Int(streamDescription.mBytesPerFrame))
+        let frameLength = AVAudioFrameCount(Int(firstBuffer.mDataByteSize) / bytesPerFrame)
+        guard frameLength > 0,
+              let buffer = AVAudioPCMBuffer(
+                pcmFormat: inputFormat,
+                bufferListNoCopy: UnsafeMutablePointer(mutating: inputData),
+                deallocator: nil
+              )
+        else { return }
+
+        buffer.frameLength = frameLength
+        try? audioFile.write(from: buffer)
+    }
 }
 
 enum SystemAudioTapError: LocalizedError {
     case tapCreationFailed
     case aggregateCreationFailed
+    case unsupportedFormat
 
     var errorDescription: String? {
         switch self {
@@ -109,6 +155,8 @@ enum SystemAudioTapError: LocalizedError {
             "Wiretap could not create the private system-audio process tap."
         case .aggregateCreationFailed:
             "Wiretap could not create the private aggregate device for the system-audio tap."
+        case .unsupportedFormat:
+            "Wiretap could not read the system-audio tap format."
         }
     }
 }

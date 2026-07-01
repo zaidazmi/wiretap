@@ -23,15 +23,19 @@ final class WiretapStore {
     @ObservationIgnored private let microphoneRecorder: MicrophoneRecorder
     @ObservationIgnored private let playbackController: AudioPlaybackController
     @ObservationIgnored private let systemAudioTap: SystemAudioTap
+    @ObservationIgnored private let mixerWriter: AudioMixerWriter
     @ObservationIgnored private var activeRecordingID: Recording.ID?
-    @ObservationIgnored private var activeRecordingURL: URL?
+    @ObservationIgnored private var activeFinalURL: URL?
+    @ObservationIgnored private var activeMicrophoneURL: URL?
+    @ObservationIgnored private var activeSystemAudioURL: URL?
 
     init(
         recordings: [Recording] = [],
         repository: RecordingLibraryRepository = RecordingLibraryRepository(),
         microphoneRecorder: MicrophoneRecorder = MicrophoneRecorder(),
         playbackController: AudioPlaybackController = AudioPlaybackController(),
-        systemAudioTap: SystemAudioTap = SystemAudioTap()
+        systemAudioTap: SystemAudioTap = SystemAudioTap(),
+        mixerWriter: AudioMixerWriter = AudioMixerWriter()
     ) {
         self.recordings = recordings
         self.selectedRecordingID = recordings.first?.id
@@ -39,6 +43,7 @@ final class WiretapStore {
         self.microphoneRecorder = microphoneRecorder
         self.playbackController = playbackController
         self.systemAudioTap = systemAudioTap
+        self.mixerWriter = mixerWriter
     }
 
     var filteredRecordings: [Recording] {
@@ -122,19 +127,24 @@ final class WiretapStore {
 
         do {
             let id = UUID()
-            let url = try repository.recordingURL(for: id)
+            let finalURL = try repository.recordingURL(for: id)
+            let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+            let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
+
             do {
-                try systemAudioTap.start()
+                try systemAudioTap.start(writingTo: systemAudioURL)
             } catch {
                 notice = WiretapNotice(
                     title: "System Audio Pending",
                     message: "Microphone recording will continue. System-audio tap setup failed: \(error.localizedDescription)"
                 )
             }
-            try microphoneRecorder.startRecording(to: url)
+            try microphoneRecorder.startRecording(to: microphoneURL)
 
             activeRecordingID = id
-            activeRecordingURL = url
+            activeFinalURL = finalURL
+            activeMicrophoneURL = microphoneURL
+            activeSystemAudioURL = systemAudioURL
             isRecording = true
             recordingStartedAt = Date()
             elapsedSeconds = 0
@@ -153,34 +163,25 @@ final class WiretapStore {
         let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
 
         guard let id = activeRecordingID,
-              let fileURL = activeRecordingURL
+              let finalURL = activeFinalURL,
+              let microphoneURL = activeMicrophoneURL,
+              let systemAudioURL = activeSystemAudioURL
         else {
             resetRecordingState()
             return
         }
 
-        var status: Recording.Status = .finalized
-        if !FileManager.default.fileExists(atPath: fileURL.path) {
-            status = .missingFile
-        }
-
-        let recording = Recording(
-            id: id,
-            title: title,
-            createdAt: Date(),
-            duration: duration,
-            fileURL: fileURL,
-            fileSizeBytes: repository.fileSize(for: fileURL),
-            sampleRate: 48_000,
-            channelCount: 2,
-            sourceSummary: "Default microphone",
-            status: status
-        )
-
-        recordings.insert(recording, at: 0)
-        selectedRecordingID = recording.id
-        saveLibrary()
         resetRecordingState()
+
+        Task {
+            await finalizeRecording(
+                id: id,
+                title: title,
+                durationFallback: duration,
+                finalURL: finalURL,
+                sourceURLs: [systemAudioURL, microphoneURL]
+            )
+        }
     }
 
     func tick(now: Date = Date()) {
@@ -321,7 +322,9 @@ final class WiretapStore {
         recordingStartedAt = nil
         elapsedSeconds = 0
         activeRecordingID = nil
-        activeRecordingURL = nil
+        activeFinalURL = nil
+        activeMicrophoneURL = nil
+        activeSystemAudioURL = nil
     }
 
     private func syncPlaybackState() {
@@ -329,6 +332,62 @@ final class WiretapStore {
         isPlaying = playbackController.isPlaying
         playbackTime = playbackController.currentTime
         playbackDuration = playbackController.duration
+    }
+
+    private func finalizeRecording(
+        id: Recording.ID,
+        title: String,
+        durationFallback: TimeInterval,
+        finalURL: URL,
+        sourceURLs: [URL]
+    ) async {
+        do {
+            let mixedDuration = try await mixerWriter.mix(inputURLs: sourceURLs, outputURL: finalURL)
+            let sourceSummary = sourceSummary(for: sourceURLs)
+            let recording = Recording(
+                id: id,
+                title: title,
+                createdAt: Date(),
+                duration: max(mixedDuration, durationFallback, 1),
+                fileURL: finalURL,
+                fileSizeBytes: repository.fileSize(for: finalURL),
+                sampleRate: 48_000,
+                channelCount: 2,
+                sourceSummary: sourceSummary,
+                status: .finalized
+            )
+
+            recordings.insert(recording, at: 0)
+            selectedRecordingID = recording.id
+            saveLibrary()
+            repository.deleteTemporaryFiles(sourceURLs)
+        } catch {
+            repository.deleteTemporaryFiles(sourceURLs)
+            notice = WiretapNotice(title: "Finalization Failed", message: error.localizedDescription)
+        }
+    }
+
+    private func sourceSummary(for sourceURLs: [URL]) -> String {
+        let existingNames = sourceURLs.compactMap { url -> String? in
+            guard FileManager.default.fileExists(atPath: url.path),
+                  repository.fileSize(for: url) > 0
+            else { return nil }
+
+            let name = url.deletingPathExtension().lastPathComponent
+            if name.hasSuffix("-system") {
+                return "System audio"
+            }
+            if name.hasSuffix("-microphone") {
+                return "default microphone"
+            }
+            return nil
+        }
+
+        if existingNames.contains("System audio"), existingNames.contains("default microphone") {
+            return "System audio + default microphone"
+        }
+
+        return existingNames.first ?? "Recorded audio"
     }
 }
 

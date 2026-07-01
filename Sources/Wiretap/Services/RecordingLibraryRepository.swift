@@ -52,6 +52,13 @@ struct RecordingLibraryRepository {
             .appendingPathExtension("m4a")
     }
 
+    func temporarySourceURL(for id: Recording.ID, source: String) throws -> URL {
+        try prepare()
+        return recordingsDirectory
+            .appendingPathComponent("\(id.uuidString)-\(source)", isDirectory: false)
+            .appendingPathExtension("m4a")
+    }
+
     func fileSize(for url: URL) -> Int64 {
         let values = try? url.resourceValues(forKeys: [.fileSizeKey])
         return Int64(values?.fileSize ?? 0)
@@ -77,6 +84,12 @@ struct RecordingLibraryRepository {
         }
 
         try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+    }
+
+    func deleteTemporaryFiles(_ urls: [URL]) {
+        for url in urls where FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }
 

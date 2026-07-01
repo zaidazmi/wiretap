@@ -26,6 +26,13 @@ struct MenuBarView: View {
 
             VStack(spacing: 8) {
                 Button {
+                    store.isOnboardingPresented = true
+                } label: {
+                    Label("Permissions", systemImage: "lock.shield")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Button {
                     libraryWindowController.show(store: store)
                 } label: {
                     Label("Open Library", systemImage: "rectangle.stack")
@@ -43,6 +50,27 @@ struct MenuBarView: View {
             .padding(16)
         }
         .frame(width: 360)
+        .sheet(isPresented: $store.isOnboardingPresented) {
+            OnboardingView(store: store)
+        }
+        .alert(item: $store.notice) { notice in
+            if let recovery = notice.recovery {
+                Alert(
+                    title: Text(notice.title),
+                    message: Text(notice.message),
+                    primaryButton: .default(Text(recovery.buttonTitle)) {
+                        store.openSettings(for: recovery)
+                    },
+                    secondaryButton: .cancel(Text("OK"))
+                )
+            } else {
+                Alert(
+                    title: Text(notice.title),
+                    message: Text(notice.message),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
+        }
         .task(id: store.isRecording) {
             while store.isRecording {
                 store.tick()

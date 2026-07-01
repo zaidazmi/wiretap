@@ -23,17 +23,20 @@ struct OnboardingView: View {
                 PermissionRow(
                     title: "System Audio",
                     summary: "Captures the audio playing on this Mac, including headphone playback.",
-                    systemImage: "speaker.wave.3.fill"
+                    systemImage: "speaker.wave.3.fill",
+                    state: store.systemAudioState
                 )
                 PermissionRow(
                     title: "Microphone",
                     summary: "Uses the current macOS default input device.",
-                    systemImage: "mic.fill"
+                    systemImage: "mic.fill",
+                    state: store.microphoneState
                 )
                 PermissionRow(
                     title: "Local Files",
                     summary: "Saves mixed AAC .m4a recordings in the app library.",
-                    systemImage: "externaldrive.fill"
+                    systemImage: "externaldrive.fill",
+                    state: .ready
                 )
             }
 
@@ -41,9 +44,9 @@ struct OnboardingView: View {
 
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(store.permissionState.title)
+                    Text(store.capturePermissionTitle)
                         .font(.headline)
-                    Text(store.permissionState.summary)
+                    Text(store.capturePermissionSummary)
                         .foregroundStyle(.secondary)
                 }
 
@@ -61,9 +64,13 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                if store.permissionState == .denied {
+                if store.permissionState == .denied || store.systemAudioState == .unavailable {
                     Button("Open Settings") {
-                        store.openPermissionSettings()
+                        if store.systemAudioState == .unavailable {
+                            store.openSettings(for: .systemAudioSettings)
+                        } else {
+                            store.openPermissionSettings()
+                        }
                         dismiss()
                     }
                 }
@@ -78,6 +85,7 @@ private struct PermissionRow: View {
     let title: String
     let summary: String
     let systemImage: String
+    let state: CaptureSourceState
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -86,14 +94,38 @@ private struct PermissionRow: View {
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
+                HStack {
+                    Text(title)
+                        .font(.headline)
+                    Spacer()
+                    Label(state.label, systemImage: stateIcon)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(stateColor)
+                        .labelStyle(.iconOnly)
+                        .help(state.label)
+                }
                 Text(summary)
                     .foregroundStyle(.secondary)
             }
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var stateIcon: String {
+        switch state {
+        case .notChecked: "circle"
+        case .ready: "checkmark.circle.fill"
+        case .unavailable: "exclamationmark.circle.fill"
+        }
+    }
+
+    private var stateColor: Color {
+        switch state {
+        case .notChecked: .secondary
+        case .ready: .green
+        case .unavailable: .orange
+        }
     }
 }
 

@@ -18,6 +18,8 @@ final class WiretapStore {
     var isPlaying = false
     var playbackTime: TimeInterval = 0
     var playbackDuration: TimeInterval = 0
+    var systemAudioState: CaptureSourceState = .notChecked
+    var microphoneState: CaptureSourceState = .notChecked
 
     @ObservationIgnored private let repository: RecordingLibraryRepository
     @ObservationIgnored private let microphoneRecorder: MicrophoneRecorder
@@ -30,6 +32,7 @@ final class WiretapStore {
     @ObservationIgnored private var activeFinalURL: URL?
     @ObservationIgnored private var activeMicrophoneURL: URL?
     @ObservationIgnored private var activeSystemAudioURL: URL?
+    @ObservationIgnored private var activeCaptureSources = Set<RecordingSource>()
 
     init(
         recordings: [Recording] = [],
@@ -95,10 +98,34 @@ final class WiretapStore {
 
     var recordingSubtitle: String {
         if isRecording {
-            return "Default microphone capture active"
+            return activeCaptureSources.contains(.systemAudio)
+                ? "System audio and default microphone capture active"
+                : "Default microphone capture active"
         }
 
-        return permissionState == .ready ? "Permissions ready" : "Permissions pending review"
+        if permissionState != .ready {
+            return "Permissions pending review"
+        }
+
+        return systemAudioState == .unavailable
+            ? "Microphone ready, system audio needs review"
+            : "Permissions ready"
+    }
+
+    var capturePermissionTitle: String {
+        if systemAudioState == .unavailable, permissionState == .ready {
+            return "System Audio Needs Review"
+        }
+
+        return permissionState.title
+    }
+
+    var capturePermissionSummary: String {
+        if systemAudioState == .unavailable, permissionState == .ready {
+            return "Microphone access is ready. System audio capture needs Settings review."
+        }
+
+        return permissionState.summary
     }
 
     var canRecord: Bool {
@@ -107,6 +134,7 @@ final class WiretapStore {
 
     func loadLibrary() {
         permissionState = permissionManager.currentState()
+        microphoneState = microphoneCaptureState(for: permissionState)
 
         do {
             let loadedRecordings = try repository.loadRecordings()
@@ -136,10 +164,13 @@ final class WiretapStore {
         guard canRecord else {
             notice = WiretapNotice(
                 title: "Permissions Denied",
-                message: permissionState.summary
+                message: permissionState.summary,
+                recovery: .microphoneSettings
             )
             return
         }
+
+        var cleanupURLs = [URL]()
 
         do {
             try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
@@ -148,26 +179,42 @@ final class WiretapStore {
             let finalURL = try repository.recordingURL(for: id)
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
+            var captureSources = Set<RecordingSource>()
+            cleanupURLs = [microphoneURL, systemAudioURL]
 
             do {
                 try systemAudioTap.start(writingTo: systemAudioURL)
+                systemAudioState = .ready
+                captureSources.insert(.systemAudio)
             } catch {
+                systemAudioState = .unavailable
                 notice = WiretapNotice(
-                    title: "System Audio Pending",
-                    message: "Microphone recording will continue. System-audio tap setup failed: \(error.localizedDescription)"
+                    title: SystemAudioTapError.isPermissionDenied(error)
+                        ? "System Audio Permission Needed"
+                        : "System Audio Unavailable",
+                    message: systemAudioFailureMessage(for: error),
+                    recovery: SystemAudioTapError.isPermissionDenied(error) ? .systemAudioSettings : nil
                 )
             }
             try microphoneRecorder.startRecording(to: microphoneURL)
+            microphoneState = .ready
+            captureSources.insert(.microphone)
 
             activeRecordingID = id
             activeFinalURL = finalURL
             activeMicrophoneURL = microphoneURL
             activeSystemAudioURL = systemAudioURL
+            activeCaptureSources = captureSources
             isRecording = true
             recordingStartedAt = Date()
             elapsedSeconds = 0
             permissionState = .ready
         } catch {
+            microphoneRecorder.stopRecording()
+            systemAudioTap.stop()
+            microphoneState = .unavailable
+            repository.deleteTemporaryFiles(cleanupURLs)
+            resetRecordingState()
             notice = WiretapNotice(title: "Recording Error", message: error.localizedDescription)
         }
     }
@@ -179,6 +226,7 @@ final class WiretapStore {
         systemAudioTap.stop()
         let duration = max(elapsedSeconds, measuredDuration, 1)
         let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
+        let captureSources = activeCaptureSources
 
         guard let id = activeRecordingID,
               let finalURL = activeFinalURL,
@@ -191,16 +239,19 @@ final class WiretapStore {
 
         resetRecordingState()
 
+        var inputs = [AudioMixerInput(url: microphoneURL, source: .microphone)]
+        if captureSources.contains(.systemAudio) {
+            inputs.insert(AudioMixerInput(url: systemAudioURL, source: .systemAudio), at: 0)
+        }
+
         Task {
             await finalizeRecording(
                 id: id,
                 title: title,
                 durationFallback: duration,
                 finalURL: finalURL,
-                inputs: [
-                    AudioMixerInput(url: systemAudioURL, source: .systemAudio),
-                    AudioMixerInput(url: microphoneURL, source: .microphone)
-                ]
+                inputs: inputs,
+                cleanupURLs: [systemAudioURL, microphoneURL]
             )
         }
     }
@@ -334,18 +385,29 @@ final class WiretapStore {
 
     func requestPermissions() async {
         permissionState = await permissionManager.requestMicrophoneAccess()
+        microphoneState = microphoneCaptureState(for: permissionState)
         isOnboardingPresented = false
 
         if permissionState == .denied {
             notice = WiretapNotice(
                 title: "Microphone Access Denied",
-                message: "Open System Settings to allow microphone access before recording."
+                message: "Open System Settings to allow microphone access before recording.",
+                recovery: .microphoneSettings
             )
         }
     }
 
     func openPermissionSettings() {
-        permissionManager.openPrivacySettings()
+        permissionManager.openPrivacySettings(.microphone)
+    }
+
+    func openSettings(for recovery: WiretapNoticeRecovery) {
+        switch recovery {
+        case .microphoneSettings:
+            permissionManager.openPrivacySettings(.microphone)
+        case .systemAudioSettings:
+            permissionManager.openPrivacySettings(.systemAudio)
+        }
     }
 
     private func saveLibrary() {
@@ -364,6 +426,7 @@ final class WiretapStore {
         activeFinalURL = nil
         activeMicrophoneURL = nil
         activeSystemAudioURL = nil
+        activeCaptureSources = []
     }
 
     private func syncPlaybackState() {
@@ -378,10 +441,9 @@ final class WiretapStore {
         title: String,
         durationFallback: TimeInterval,
         finalURL: URL,
-        inputs: [AudioMixerInput]
+        inputs: [AudioMixerInput],
+        cleanupURLs: [URL]
     ) async {
-        let sourceURLs = inputs.map(\.url)
-
         do {
             let mixResult = try await mixerWriter.mix(inputs: inputs, outputURL: finalURL)
             let sourceSummary = Recording.sourceSummary(for: mixResult.sources)
@@ -401,9 +463,9 @@ final class WiretapStore {
             recordings.insert(recording, at: 0)
             selectedRecordingID = recording.id
             saveLibrary()
-            repository.deleteTemporaryFiles(sourceURLs)
+            repository.deleteTemporaryFiles(cleanupURLs)
         } catch {
-            let recoveryFolderURL = try? repository.retainTemporaryFiles(sourceURLs, for: id)
+            let recoveryFolderURL = try? repository.retainTemporaryFiles(cleanupURLs, for: id)
             let interruptedRecording = Recording(
                 id: id,
                 title: title,
@@ -431,6 +493,40 @@ struct WiretapNotice: Identifiable, Equatable {
     let id = UUID()
     var title: String
     var message: String
+    var recovery: WiretapNoticeRecovery? = nil
+}
+
+enum WiretapNoticeRecovery: Equatable {
+    case microphoneSettings
+    case systemAudioSettings
+
+    var buttonTitle: String {
+        switch self {
+        case .microphoneSettings: "Open Microphone Settings"
+        case .systemAudioSettings: "Open Privacy Settings"
+        }
+    }
+}
+
+private extension WiretapStore {
+    func microphoneCaptureState(for permissionState: PermissionState) -> CaptureSourceState {
+        switch permissionState {
+        case .ready:
+            return .ready
+        case .denied:
+            return .unavailable
+        case .notReviewed:
+            return .notChecked
+        }
+    }
+
+    func systemAudioFailureMessage(for error: Error) -> String {
+        if SystemAudioTapError.isPermissionDenied(error) {
+            return "Microphone recording will continue. Open Privacy & Security settings, allow Wiretap under Audio Capture if macOS lists it, then retry recording."
+        }
+
+        return "Microphone recording will continue. System-audio tap setup failed: \(error.localizedDescription)"
+    }
 }
 
 extension WiretapStore {

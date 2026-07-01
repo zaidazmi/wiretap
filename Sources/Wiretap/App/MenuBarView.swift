@@ -13,7 +13,12 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 14) {
                 MenuRecordingPanel(store: store)
                 RecordingControlsView(store: store)
-                MenuCaptureSources(permissionState: store.permissionState)
+                MenuCaptureSources(
+                    permissionState: store.permissionState,
+                    permissionTitle: store.capturePermissionTitle,
+                    systemAudioState: store.systemAudioState,
+                    microphoneState: store.microphoneState
+                )
             }
             .padding(16)
 
@@ -121,19 +126,30 @@ private struct MenuMetric: View {
 
 private struct MenuCaptureSources: View {
     let permissionState: PermissionState
+    let permissionTitle: String
+    let systemAudioState: CaptureSourceState
+    let microphoneState: CaptureSourceState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Capture")
                 .font(.subheadline.weight(.semibold))
 
-            SourceRow(title: "System audio", systemImage: "speaker.wave.2.fill")
-            SourceRow(title: "Default microphone", systemImage: "mic.fill")
+            SourceRow(
+                title: "System audio",
+                systemImage: "speaker.wave.2.fill",
+                state: systemAudioState
+            )
+            SourceRow(
+                title: "Default microphone",
+                systemImage: "mic.fill",
+                state: microphoneState
+            )
 
             HStack {
                 Image(systemName: permissionState == .ready ? "checkmark.shield.fill" : "lock.shield")
-                    .foregroundStyle(permissionState == .ready ? .green : .secondary)
-                Text(permissionState.title)
+                    .foregroundStyle(systemAudioState == .unavailable ? .orange : permissionState == .ready ? .green : .secondary)
+                Text(permissionTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -145,6 +161,7 @@ private struct MenuCaptureSources: View {
 private struct SourceRow: View {
     let title: String
     let systemImage: String
+    let state: CaptureSourceState
 
     var body: some View {
         HStack(spacing: 10) {
@@ -154,8 +171,25 @@ private struct SourceRow: View {
             Text(title)
                 .font(.callout)
             Spacer()
-            Image(systemName: "checkmark.circle")
-                .foregroundStyle(.secondary)
+            Image(systemName: stateIcon)
+                .foregroundStyle(stateColor)
+                .help(state.label)
+        }
+    }
+
+    private var stateIcon: String {
+        switch state {
+        case .notChecked: "circle"
+        case .ready: "checkmark.circle.fill"
+        case .unavailable: "exclamationmark.circle.fill"
+        }
+    }
+
+    private var stateColor: Color {
+        switch state {
+        case .notChecked: .secondary
+        case .ready: .green
+        case .unavailable: .orange
         }
     }
 }

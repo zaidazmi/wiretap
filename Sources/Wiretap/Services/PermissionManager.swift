@@ -31,10 +31,33 @@ struct PermissionManager {
         }
     }
 
-    func openPrivacySettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-        if let url {
+    func openPrivacySettings(_ target: PrivacySettingsTarget = .microphone) {
+        for urlString in target.urlStrings {
+            guard let url = URL(string: urlString) else { continue }
             NSWorkspace.shared.open(url)
+            return
+        }
+    }
+}
+
+enum PrivacySettingsTarget: Hashable {
+    case microphone
+    case systemAudio
+
+    fileprivate var urlStrings: [String] {
+        switch self {
+        case .microphone:
+            [
+                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+                "x-apple.systempreferences:com.apple.preference.security"
+            ]
+        case .systemAudio:
+            [
+                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy",
+                "x-apple.systempreferences:com.apple.preference.security"
+            ]
         }
     }
 }

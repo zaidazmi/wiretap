@@ -74,8 +74,9 @@ final class SystemAudioTap {
 
             self.ioProcID = ioProcID
         } catch {
+            let mappedError = SystemAudioTapError.map(error)
             stop()
-            throw error
+            throw mappedError
         }
     }
 
@@ -111,12 +112,15 @@ final class SystemAudioTap {
 }
 
 enum SystemAudioTapError: LocalizedError {
+    case permissionDenied
     case tapCreationFailed
     case aggregateCreationFailed
     case unsupportedFormat
 
     var errorDescription: String? {
         switch self {
+        case .permissionDenied:
+            "Wiretap does not have permission to capture system audio."
         case .tapCreationFailed:
             "Wiretap could not create the private system-audio process tap."
         case .aggregateCreationFailed:
@@ -124,6 +128,30 @@ enum SystemAudioTapError: LocalizedError {
         case .unsupportedFormat:
             "Wiretap could not read the system-audio tap format."
         }
+    }
+
+    static func map(_ error: Error) -> Error {
+        if isPermissionDenied(error) {
+            return SystemAudioTapError.permissionDenied
+        }
+
+        return error
+    }
+
+    static func isPermissionDenied(_ error: Error) -> Bool {
+        if case SystemAudioTapError.permissionDenied = error {
+            return true
+        }
+
+        if let error = error as? AudioHardwareError {
+            return error.error == kAudioDevicePermissionsError
+        }
+
+        if let error = error as? CoreAudioStatusError {
+            return error.status == kAudioDevicePermissionsError
+        }
+
+        return false
     }
 }
 

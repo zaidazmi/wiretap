@@ -29,5 +29,8 @@ jobs:
       - name: Build verified DMG
         run: Scripts/package-dmg.sh debug
 
-      - name: Verify app signature
-        run: codesign --verify --deep --strict --verbose=2 .build/Wiretap.app
+      - name: Verify packaged artifact
+        run: |
+          WIRETAP_VERIFY_SKIP_TESTS=1 \
+          WIRETAP_VERIFY_SKIP_BUILD=1 \
+          Scripts/verify-release.sh debug

@@ -39,11 +39,21 @@ WIRETAP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" Scripts/pac
 
 To notarize the DMG, also set `WIRETAP_NOTARIZE=1`, `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`.
 
+To verify a built release artifact without rebuilding it:
+
+```sh
+WIRETAP_VERIFY_SKIP_TESTS=1 WIRETAP_VERIFY_SKIP_BUILD=1 Scripts/verify-release.sh release
+```
+
+For notarized release candidates, add `WIRETAP_VERIFY_REQUIRE_NOTARIZATION=1`. Gatekeeper and launch checks are opt-in with `WIRETAP_VERIFY_REQUIRE_GATEKEEPER=1` and `WIRETAP_VERIFY_LAUNCH=1`.
+
 ## GitHub Releases
 
 CI and release jobs run on GitHub's `macos-26` runner so Swift 6.2 is available.
 
 Pushing a `v<CFBundleShortVersionString>` tag runs the release workflow, builds a release DMG, signs it with Developer ID, notarizes it, staples it, and uploads it to GitHub Releases.
+
+The release workflow also mounts and verifies the DMG layout, app signature, app metadata, DMG checksum, and stapled notarization ticket before publishing.
 
 Required repository secrets:
 

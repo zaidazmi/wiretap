@@ -69,9 +69,14 @@ jobs:
         run: swift test
 
       - name: Build signed notarized DMG
+        run: WIRETAP_NOTARIZE=1 Scripts/package-dmg.sh release
+
+      - name: Verify signed notarized artifact
         run: |
-          WIRETAP_NOTARIZE=1 Scripts/package-dmg.sh release
-          codesign --verify --deep --strict --verbose=2 .build/Wiretap.app
+          WIRETAP_VERIFY_SKIP_TESTS=1 \
+          WIRETAP_VERIFY_SKIP_BUILD=1 \
+          WIRETAP_VERIFY_REQUIRE_NOTARIZATION=1 \
+          Scripts/verify-release.sh release
 
       - name: Publish GitHub release
         env:

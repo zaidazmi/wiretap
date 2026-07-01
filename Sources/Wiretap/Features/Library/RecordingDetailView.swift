@@ -108,19 +108,11 @@ struct RecordingDetailView: View {
 
             if recording.status == .interrupted, let recoveryFolderURL = recording.recoveryFolderURL {
                 GridRow {
-                    DetailPanel(title: "Recovery", systemImage: "externaldrive.badge.exclamationmark") {
-                        Text("Source files were retained because finalization was interrupted.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-
-                        MetadataRow(title: "Folder", value: recoveryFolderURL.path)
-
-                        Button {
-                            store.reveal(recording)
-                        } label: {
-                            Label("Reveal Recovery Folder", systemImage: "folder")
-                        }
-                    }
+                    InterruptedRecordingPanel(
+                        sourceSummary: recording.sourceSummary,
+                        recoveryFolderURL: recoveryFolderURL,
+                        onReveal: { store.reveal(recording) }
+                    )
                     .gridCellColumns(2)
                 }
             }
@@ -205,6 +197,37 @@ private struct PlaybackProgressTrack: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .accessibilityHidden(true)
+    }
+}
+
+private struct InterruptedRecordingPanel: View {
+    let sourceSummary: String
+    let recoveryFolderURL: URL
+    let onReveal: () -> Void
+
+    var body: some View {
+        DetailPanel(title: "Needs Review", systemImage: "externaldrive.badge.exclamationmark") {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "waveform.badge.exclamationmark")
+                    .font(.title2)
+                    .foregroundStyle(.orange)
+                    .frame(width: 34)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("This recording was stopped before Wiretap could produce a finalized .m4a.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    MetadataRow(title: "Status", value: sourceSummary)
+                    MetadataRow(title: "Retained sources", value: recoveryFolderURL.path)
+
+                    Button(action: onReveal) {
+                        Label("Reveal Recovery Folder", systemImage: "folder")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
     }
 }
 

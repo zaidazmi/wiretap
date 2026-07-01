@@ -1,8 +1,9 @@
+import AppKit
 import SwiftUI
 
 struct MenuBarView: View {
+    @Environment(\.openWindow) private var openWindow
     @Bindable var store: WiretapStore
-    let libraryWindowController: LibraryWindowController
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,6 +12,17 @@ struct MenuBarView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 14) {
+                if let notice = store.notice {
+                    MenuNoticeBanner(
+                        notice: notice,
+                        openRecovery: { recovery in
+                            store.openSettings(for: recovery)
+                            store.notice = nil
+                        },
+                        dismiss: { store.notice = nil }
+                    )
+                }
+
                 MenuRecordingPanel(store: store)
                 RecordingControlsView(store: store)
                 MenuCaptureSources(
@@ -26,6 +38,7 @@ struct MenuBarView: View {
 
             VStack(spacing: 8) {
                 Button {
+                    showLibrary()
                     store.isOnboardingPresented = true
                 } label: {
                     Label("Permissions", systemImage: "lock.shield")
@@ -33,7 +46,7 @@ struct MenuBarView: View {
                 }
 
                 Button {
-                    libraryWindowController.show(store: store)
+                    showLibrary()
                 } label: {
                     Label("Open Library", systemImage: "rectangle.stack")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -50,33 +63,12 @@ struct MenuBarView: View {
             .padding(16)
         }
         .frame(width: 360)
-        .sheet(isPresented: $store.isOnboardingPresented) {
-            OnboardingView(store: store)
-        }
-        .alert(item: $store.notice) { notice in
-            if let recovery = notice.recovery {
-                Alert(
-                    title: Text(notice.title),
-                    message: Text(notice.message),
-                    primaryButton: .default(Text(recovery.buttonTitle)) {
-                        store.openSettings(for: recovery)
-                    },
-                    secondaryButton: .cancel(Text("OK"))
-                )
-            } else {
-                Alert(
-                    title: Text(notice.title),
-                    message: Text(notice.message),
-                    dismissButton: .default(Text("OK"))
-                )
-            }
-        }
-        .task(id: store.isTimelineActive) {
-            while store.isTimelineActive {
-                store.tick()
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
+    }
+
+    private func showLibrary() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        openWindow(id: WiretapWindow.library)
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 }
 
@@ -152,6 +144,52 @@ private struct MenuMetric: View {
     }
 }
 
+private struct MenuNoticeBanner: View {
+    let notice: WiretapNotice
+    let openRecovery: (WiretapNoticeRecovery) -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: notice.recovery == nil ? "info.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(notice.recovery == nil ? Color.secondary : Color.orange)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(notice.title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(notice.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+            }
+
+            if let recovery = notice.recovery {
+                Button {
+                    openRecovery(recovery)
+                } label: {
+                    Label(recovery.buttonTitle, systemImage: "gear")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
 private struct MenuCaptureSources: View {
     let permissionState: PermissionState
     let permissionTitle: String
@@ -223,6 +261,6 @@ private struct SourceRow: View {
 }
 
 #Preview {
-    MenuBarView(store: .preview, libraryWindowController: LibraryWindowController())
+    MenuBarView(store: .preview)
         .padding()
 }

@@ -4,14 +4,18 @@ import Foundation
 final class RecordingLifecycleMonitor {
     private typealias Observation = (center: NotificationCenter, token: NSObjectProtocol)
 
+    private let audioDeviceChangeMonitor: any AudioDeviceChangeMonitoring
     private var observations: [Observation] = []
 
     @MainActor
     init(
         store: WiretapStore,
         notificationCenter: NotificationCenter = .default,
-        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter
+        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        audioDeviceChangeMonitor: any AudioDeviceChangeMonitoring = AudioDeviceChangeMonitor()
     ) {
+        self.audioDeviceChangeMonitor = audioDeviceChangeMonitor
+
         observe(
             NSApplication.willTerminateNotification,
             center: notificationCenter
@@ -32,12 +36,17 @@ final class RecordingLifecycleMonitor {
         ) { [weak store] in
             store?.interruptRecording(reason: .sessionInactive)
         }
+
+        audioDeviceChangeMonitor.start { [weak store] in
+            store?.preserveInterruptedRecording(reason: .audioDeviceChanged)
+        }
     }
 
     deinit {
         for observation in observations {
             observation.center.removeObserver(observation.token)
         }
+        audioDeviceChangeMonitor.stop()
     }
 
     private func observe(

@@ -2,18 +2,65 @@ import SwiftUI
 
 struct EmptyLibraryView: View {
     let isFiltering: Bool
+    let canRecord: Bool
+    let onRecord: () -> Void
+    let onReviewPermissions: () -> Void
+    let onClearSearch: () -> Void
 
     var body: some View {
-        ContentUnavailableView {
-            Label(isFiltering ? "No Matches" : "No Recordings", systemImage: isFiltering ? "magnifyingglass" : "tray")
-        } description: {
-            Text(isFiltering ? "Try a different search." : "Recordings will appear here after capture is enabled.")
+        VStack(spacing: 18) {
+            ContentUnavailableView {
+                Label(title, systemImage: systemImage)
+            } description: {
+                Text(description)
+            }
+
+            HStack(spacing: 10) {
+                if isFiltering {
+                    Button(action: onClearSearch) {
+                        Label("Clear Search", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button(action: onRecord) {
+                        Label("Record", systemImage: "record.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .disabled(!canRecord)
+
+                    Button(action: onReviewPermissions) {
+                        Label("Permissions", systemImage: "lock.shield")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var title: String {
+        isFiltering ? "No Matches" : "No Recordings"
+    }
+
+    private var systemImage: String {
+        isFiltering ? "magnifyingglass" : "waveform.circle"
+    }
+
+    private var description: String {
+        isFiltering
+            ? "Try a different search or clear the current filter."
+            : "Start a local recording when you are ready to capture system audio and the default microphone."
     }
 }
 
 #Preview {
-    EmptyLibraryView(isFiltering: false)
+    EmptyLibraryView(
+        isFiltering: false,
+        canRecord: true,
+        onRecord: {},
+        onReviewPermissions: {},
+        onClearSearch: {}
+    )
         .frame(width: 420, height: 360)
 }

@@ -63,6 +63,10 @@ final class RecordingModelTests: XCTestCase {
                 .localizedStandardContains("session changed")
         )
         XCTAssertEqual(
+            RecordingInterruptionReason.audioDeviceChanged.recoverySummary,
+            "Interrupted - source files retained after audio device change"
+        )
+        XCTAssertEqual(
             RecordingInterruptionReason.unexpectedShutdown.recoverySummary,
             "Interrupted - source files retained after unexpected shutdown"
         )

@@ -16,7 +16,13 @@ struct LibraryView: View {
                 if let recording = store.selectedRecording {
                     RecordingDetailView(recording: recording, store: store)
                 } else {
-                    EmptyLibraryView(isFiltering: !store.searchText.isEmpty)
+                    EmptyLibraryView(
+                        isFiltering: !store.searchText.isEmpty,
+                        canRecord: store.canRecord,
+                        onRecord: { store.startRecording() },
+                        onReviewPermissions: { store.isOnboardingPresented = true },
+                        onClearSearch: { store.searchText = "" }
+                    )
                 }
             }
         }
@@ -30,33 +36,6 @@ struct LibraryView: View {
                 .help("Review capture permissions")
 
                 RecordingControlView(store: store, style: .toolbar)
-            }
-        }
-        .sheet(isPresented: $store.isOnboardingPresented) {
-            OnboardingView(store: store)
-        }
-        .alert(item: $store.notice) { notice in
-            if let recovery = notice.recovery {
-                Alert(
-                    title: Text(notice.title),
-                    message: Text(notice.message),
-                    primaryButton: .default(Text(recovery.buttonTitle)) {
-                        store.openSettings(for: recovery)
-                    },
-                    secondaryButton: .cancel(Text("OK"))
-                )
-            } else {
-                Alert(
-                    title: Text(notice.title),
-                    message: Text(notice.message),
-                    dismissButton: .default(Text("OK"))
-                )
-            }
-        }
-        .task(id: store.isTimelineActive) {
-            while store.isTimelineActive {
-                store.tick()
-                try? await Task.sleep(for: .seconds(1))
             }
         }
     }
@@ -120,7 +99,13 @@ private struct RecordingSidebar: View {
             LibraryHeader(store: store)
 
             if store.filteredRecordings.isEmpty {
-                EmptyLibraryView(isFiltering: !store.searchText.isEmpty)
+                EmptyLibraryView(
+                    isFiltering: !store.searchText.isEmpty,
+                    canRecord: store.canRecord,
+                    onRecord: { store.startRecording() },
+                    onReviewPermissions: { store.isOnboardingPresented = true },
+                    onClearSearch: { store.searchText = "" }
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $store.selectedRecordingID) {

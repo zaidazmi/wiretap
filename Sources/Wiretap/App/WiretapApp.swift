@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct WiretapApp: App {
-    @State private var store = WiretapStore.preview
+    @State private var store = WiretapStore.live()
     private let libraryWindowController = LibraryWindowController()
 
     var body: some Scene {

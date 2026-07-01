@@ -3,21 +3,14 @@ import SwiftUI
 struct RecordingDetailView: View {
     let recording: Recording
     @Bindable var store: WiretapStore
-    @State private var playbackPosition = 0.34
-    @State private var isPlaying = false
     @State private var isConfirmingDelete = false
-    @State private var placeholderAction: PlaceholderAction?
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     detailHeader
-                    PlayerSurface(
-                        recording: recording,
-                        isPlaying: $isPlaying,
-                        playbackPosition: $playbackPosition
-                    )
+                    PlayerSurface(recording: recording, store: store)
                     detailSections
                 }
                 .padding(28)
@@ -27,9 +20,9 @@ struct RecordingDetailView: View {
             Divider()
 
             RecordingActionBar(
-                onReveal: { placeholderAction = .reveal },
-                onExport: { placeholderAction = .export },
-                onShare: { placeholderAction = .share },
+                onReveal: { store.reveal(recording) },
+                onExport: { store.export(recording) },
+                onShare: { store.share(recording) },
                 onDelete: { isConfirmingDelete = true }
             )
         }
@@ -40,18 +33,11 @@ struct RecordingDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
-                store.deleteSelected()
+                store.delete(recording)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes the library item and its local audio file.")
-        }
-        .alert(item: $placeholderAction) { action in
-            Alert(
-                title: Text(action.title),
-                message: Text(action.message),
-                dismissButton: .default(Text("OK"))
-            )
         }
     }
 
@@ -117,29 +103,48 @@ struct RecordingDetailView: View {
 
 private struct PlayerSurface: View {
     let recording: Recording
-    @Binding var isPlaying: Bool
-    @Binding var playbackPosition: Double
+    @Bindable var store: WiretapStore
+
+    private var progress: Double {
+        store.playbackProgress(for: recording)
+    }
+
+    private var isCurrentRecording: Bool {
+        store.playbackRecordingID == recording.id
+    }
+
+    private var progressText: String {
+        DurationFormatter.clock.string(from: isCurrentRecording ? store.playbackTime : 0)
+    }
 
     var body: some View {
         VStack(spacing: 18) {
-            WaveformPlaceholder(progress: playbackPosition)
+            WaveformPlaceholder(progress: progress)
                 .frame(height: 96)
 
             HStack(spacing: 14) {
                 Button {
-                    isPlaying.toggle()
+                    store.togglePlayback(for: recording)
                 } label: {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    Image(systemName: isCurrentRecording && store.isPlaying ? "pause.fill" : "play.fill")
                         .font(.title3)
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.borderedProminent)
                 .clipShape(Circle())
-                .help(isPlaying ? "Pause" : "Play")
+                .disabled(recording.fileURL == nil)
+                .help(isCurrentRecording && store.isPlaying ? "Pause" : "Play")
 
                 VStack(spacing: 8) {
-                    Slider(value: $playbackPosition, in: 0...1)
-                        .accessibilityLabel("Playback position")
+                    Slider(
+                        value: Binding(
+                            get: { progress },
+                            set: { store.seekPlayback(for: recording, progress: $0) }
+                        ),
+                        in: 0...1
+                    )
+                    .accessibilityLabel("Playback position")
+                    .disabled(!isCurrentRecording)
 
                     HStack {
                         Text(progressText)
@@ -153,10 +158,6 @@ private struct PlayerSurface: View {
         }
         .padding(18)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private var progressText: String {
-        DurationFormatter.clock.string(from: recording.duration * playbackPosition)
     }
 }
 
@@ -275,33 +276,6 @@ private struct RecordingActionBar: View {
         .buttonStyle(.bordered)
         .padding(14)
         .background(.bar)
-    }
-}
-
-private enum PlaceholderAction: Identifiable {
-    case reveal
-    case export
-    case share
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .reveal: "Reveal in Finder"
-        case .export: "Export"
-        case .share: "Share"
-        }
-    }
-
-    var message: String {
-        switch self {
-        case .reveal:
-            "Finder reveal will be connected when real recording files are written to disk."
-        case .export:
-            "Export will be connected after the recording library has file-backed items."
-        case .share:
-            "Sharing will be connected after playback and file URLs are wired."
-        }
     }
 }
 

@@ -35,6 +35,13 @@ struct LibraryView: View {
         .sheet(isPresented: $store.isOnboardingPresented) {
             OnboardingView(store: store)
         }
+        .alert(item: $store.notice) { notice in
+            Alert(
+                title: Text(notice.title),
+                message: Text(notice.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
         .task(id: store.isRecording) {
             while store.isRecording {
                 store.tick()

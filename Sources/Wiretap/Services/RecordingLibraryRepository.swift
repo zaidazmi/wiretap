@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 struct RecordingLibraryRepository {
     let applicationSupportDirectory: URL
@@ -24,7 +25,11 @@ struct RecordingLibraryRepository {
         applicationSupportDirectory.appendingPathComponent("Recovery", isDirectory: true)
     }
 
-    private var metadataURL: URL {
+    var swiftDataStoreURL: URL {
+        applicationSupportDirectory.appendingPathComponent("Recordings.store")
+    }
+
+    private var legacyMetadataURL: URL {
         applicationSupportDirectory.appendingPathComponent("Recordings.json")
     }
 
@@ -55,14 +60,20 @@ struct RecordingLibraryRepository {
     func loadRecordings() throws -> [Recording] {
         try prepare()
 
-        guard FileManager.default.fileExists(atPath: metadataURL.path) else {
-            return []
+        let context = try makeModelContext()
+        let descriptor = FetchDescriptor<RecordingRecord>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        let records = try context.fetch(descriptor)
+        if records.isEmpty {
+            let legacyRecordings = try loadLegacyRecordingsIfPresent()
+            if !legacyRecordings.isEmpty {
+                try saveRecordings(legacyRecordings)
+            }
+            return legacyRecordings
         }
 
-        let data = try Data(contentsOf: metadataURL)
-        let recordings = try JSONDecoder.wiretap.decode([Recording].self, from: data)
-
-        return recordings.sorted { $0.createdAt > $1.createdAt }
+        return records.map { $0.recording(baseDirectory: applicationSupportDirectory) }
     }
 
     func refreshedFileStatuses(for recordings: [Recording]) -> [Recording] {
@@ -101,8 +112,29 @@ struct RecordingLibraryRepository {
 
     func saveRecordings(_ recordings: [Recording]) throws {
         try prepare()
-        let data = try JSONEncoder.wiretap.encode(recordings)
-        try data.write(to: metadataURL, options: [.atomic])
+
+        let context = try makeModelContext()
+        let existingRecords = try context.fetch(FetchDescriptor<RecordingRecord>())
+        var incomingByID: [Recording.ID: Recording] = [:]
+        for recording in recordings {
+            incomingByID[recording.id] = recording
+        }
+
+        var existingIDs = Set<Recording.ID>()
+        for record in existingRecords {
+            existingIDs.insert(record.id)
+            if let recording = incomingByID[record.id] {
+                record.update(from: recording, baseDirectory: applicationSupportDirectory)
+            } else {
+                context.delete(record)
+            }
+        }
+
+        for recording in recordings where !existingIDs.contains(recording.id) {
+            context.insert(RecordingRecord(recording: recording, baseDirectory: applicationSupportDirectory))
+        }
+
+        try context.save()
     }
 
     func recordingURL(for id: Recording.ID) throws -> URL {
@@ -182,6 +214,27 @@ struct RecordingLibraryRepository {
         try? FileManager.default.removeItem(at: recoveryURL)
         return nil
     }
+
+    private func makeModelContext() throws -> ModelContext {
+        let schema = Schema([RecordingRecord.self])
+        let configuration = ModelConfiguration(
+            "WiretapLibrary",
+            schema: schema,
+            url: swiftDataStoreURL,
+            cloudKitDatabase: .none
+        )
+        return try ModelContext(ModelContainer(for: schema, configurations: [configuration]))
+    }
+
+    private func loadLegacyRecordingsIfPresent() throws -> [Recording] {
+        guard FileManager.default.fileExists(atPath: legacyMetadataURL.path) else {
+            return []
+        }
+
+        let data = try Data(contentsOf: legacyMetadataURL)
+        let recordings = try JSONDecoder.wiretap.decode([Recording].self, from: data)
+        return recordings.sorted { $0.createdAt > $1.createdAt }
+    }
 }
 
 enum RecordingLibraryError: LocalizedError {
@@ -197,15 +250,6 @@ enum RecordingLibraryError: LocalizedError {
             let requiredText = ByteCountFormatter.string(fromByteCount: required, countStyle: .file)
             return "Wiretap needs at least \(requiredText) free for a safe recording session. Available: \(availableText)."
         }
-    }
-}
-
-private extension JSONEncoder {
-    static var wiretap: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
     }
 }
 

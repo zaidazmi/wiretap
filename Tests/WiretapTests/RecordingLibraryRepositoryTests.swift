@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 @testable import Wiretap
 import XCTest
 
@@ -41,6 +42,98 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
 
         let loaded = try repository.loadRecordings()
         XCTAssertEqual(loaded, [recording])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repository.swiftDataStoreURL.path))
+    }
+
+    func testRecordingRecordStoresManagedLibraryPathsRelatively() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let fileURL = try repository.recordingURL(for: id)
+        let recoveryURL = try repository.recoveryURL(for: id)
+        let recording = Recording(
+            id: id,
+            title: "Relative",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_000),
+            duration: 1,
+            fileURL: fileURL,
+            recoveryFolderURL: recoveryURL,
+            fileSizeBytes: 1_024,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .finalized
+        )
+
+        let record = RecordingRecord(recording: recording, baseDirectory: temporaryDirectory)
+
+        XCTAssertEqual(record.filePath, "Recordings/\(id.uuidString).m4a")
+        XCTAssertEqual(record.recoveryFolderPath, "Recovery/\(id.uuidString)")
+        XCTAssertEqual(record.recording(baseDirectory: temporaryDirectory), recording)
+    }
+
+    func testLegacyJSONMetadataImportsIntoSwiftDataStore() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let fileURL = try repository.recordingURL(for: id)
+        let recording = Recording(
+            id: id,
+            title: "Legacy",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_000),
+            duration: 42,
+            fileURL: fileURL,
+            fileSizeBytes: 1_024,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .finalized
+        )
+        let legacyURL = temporaryDirectory.appendingPathComponent("Recordings.json")
+        let data = try JSONEncoder.wiretapTest.encode([recording])
+        try data.write(to: legacyURL)
+
+        XCTAssertEqual(try repository.loadRecordings(), [recording])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repository.swiftDataStoreURL.path))
+
+        try FileManager.default.removeItem(at: legacyURL)
+
+        XCTAssertEqual(try repository.loadRecordings(), [recording])
+    }
+
+    func testSaveRecordingsUpdatesAndDeletesSwiftDataRows() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let firstID = UUID()
+        let secondID = UUID()
+        let first = Recording(
+            id: firstID,
+            title: "First",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_000),
+            duration: 12,
+            fileURL: try repository.recordingURL(for: firstID),
+            fileSizeBytes: 1_024,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .finalized
+        )
+        let second = Recording(
+            id: secondID,
+            title: "Second",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 24,
+            fileURL: try repository.recordingURL(for: secondID),
+            fileSizeBytes: 2_048,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .finalized
+        )
+        var renamedFirst = first
+        renamedFirst.title = "Renamed First"
+
+        try repository.saveRecordings([first, second])
+        try repository.saveRecordings([renamedFirst])
+
+        XCTAssertEqual(try repository.loadRecordings(), [renamedFirst])
     }
 
     func testCopyAndDeleteRecordingFile() throws {
@@ -169,5 +262,14 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         try repository.deleteFileIfPresent(for: recording)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
+    }
+}
+
+private extension JSONEncoder {
+    static var wiretapTest: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
     }
 }

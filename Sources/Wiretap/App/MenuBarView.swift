@@ -31,6 +31,7 @@ struct MenuBarView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Button {
                     openWindow(id: "library")
+                    NSApplication.shared.activate(ignoringOtherApps: true)
                 } label: {
                     Label("Open Library", systemImage: "rectangle.stack")
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -99,13 +99,7 @@ private struct RecordingSidebar: View {
             LibraryHeader(store: store)
 
             if store.filteredRecordings.isEmpty {
-                EmptyLibraryView(
-                    isFiltering: !store.searchText.isEmpty,
-                    canRecord: store.canRecord,
-                    onRecord: { store.startRecording() },
-                    onReviewPermissions: { store.isOnboardingPresented = true },
-                    onClearSearch: { store.searchText = "" }
-                )
+                SidebarEmptyState(isFiltering: !store.searchText.isEmpty)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $store.selectedRecordingID) {
@@ -151,6 +145,28 @@ private struct LibraryHeader: View {
             }
         }
         .padding(18)
+    }
+}
+
+private struct SidebarEmptyState: View {
+    let isFiltering: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: isFiltering ? "magnifyingglass" : "tray")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+
+            Text(isFiltering ? "No Matches" : "No Recordings")
+                .font(.callout.weight(.semibold))
+
+            Text(isFiltering ? "Use the main empty state to clear the search." : "New recordings will appear here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 220)
+        }
+        .padding(24)
     }
 }
 

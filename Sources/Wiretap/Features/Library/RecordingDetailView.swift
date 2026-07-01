@@ -111,6 +111,8 @@ struct RecordingDetailView: View {
                     InterruptedRecordingPanel(
                         sourceSummary: recording.sourceSummary,
                         recoveryFolderURL: recoveryFolderURL,
+                        canRecord: store.canRecord,
+                        onRecord: { store.startRecording() },
                         onReveal: { store.reveal(recording) }
                     )
                     .gridCellColumns(2)
@@ -132,8 +134,27 @@ private struct PlayerSurface: View {
         store.playbackRecordingID == recording.id
     }
 
+    private var isPlayable: Bool {
+        recording.status == .finalized && recording.fileURL != nil
+    }
+
     private var progressText: String {
-        DurationFormatter.clock.string(from: isCurrentRecording ? store.playbackTime : 0)
+        DurationFormatter.clock.string(from: store.playbackTime(for: recording))
+    }
+
+    private var unavailableMessage: String? {
+        guard !isPlayable else { return nil }
+
+        switch recording.status {
+        case .recording:
+            return "Playback is available after the recording is finalized."
+        case .interrupted:
+            return "This item has retained source files but no finalized .m4a yet."
+        case .missingFile:
+            return "The finalized audio file is missing from disk."
+        case .finalized:
+            return "The finalized audio file is unavailable."
+        }
     }
 
     var body: some View {
@@ -152,7 +173,7 @@ private struct PlayerSurface: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .clipShape(Circle())
-                .disabled(recording.fileURL == nil)
+                .disabled(!isPlayable)
                 .help(isCurrentRecording && store.isPlaying ? "Pause" : "Play")
 
                 VStack(spacing: 8) {
@@ -164,7 +185,7 @@ private struct PlayerSurface: View {
                         in: 0...1
                     )
                     .accessibilityLabel("Playback position")
-                    .disabled(!isCurrentRecording)
+                    .disabled(!isPlayable)
 
                     HStack {
                         Text(progressText)
@@ -174,6 +195,13 @@ private struct PlayerSurface: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 }
+            }
+
+            if let unavailableMessage {
+                Label(unavailableMessage, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(18)
@@ -203,6 +231,8 @@ private struct PlaybackProgressTrack: View {
 private struct InterruptedRecordingPanel: View {
     let sourceSummary: String
     let recoveryFolderURL: URL
+    let canRecord: Bool
+    let onRecord: () -> Void
     let onReveal: () -> Void
 
     var body: some View {
@@ -221,10 +251,18 @@ private struct InterruptedRecordingPanel: View {
                     MetadataRow(title: "Status", value: sourceSummary)
                     MetadataRow(title: "Retained sources", value: recoveryFolderURL.path)
 
-                    Button(action: onReveal) {
-                        Label("Reveal Recovery Folder", systemImage: "folder")
+                    HStack(spacing: 10) {
+                        Button(action: onReveal) {
+                            Label("Reveal Recovery Folder", systemImage: "folder")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button(action: onRecord) {
+                            Label("Record Again", systemImage: "record.circle")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!canRecord)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
         }

@@ -20,8 +20,7 @@ struct WiretapApp: App {
         MenuBarExtra {
             MenuBarView(store: store)
         } label: {
-            Image(systemName: store.isRecording ? "record.circle.fill" : "waveform.circle")
-                .symbolRenderingMode(store.isRecording ? .multicolor : .hierarchical)
+            MenuBarLabelView(store: store)
         }
         .menuBarExtraStyle(.window)
 
@@ -43,5 +42,31 @@ struct WiretapApp: App {
                 .keyboardShortcut("l", modifiers: [.command])
             }
         }
+    }
+}
+
+private struct MenuBarLabelView: View {
+    @Environment(\.openWindow) private var openWindow
+    let store: WiretapStore
+    @State private var didOpenInitialPermissions = false
+
+    var body: some View {
+        Image(systemName: store.isRecording ? "record.circle.fill" : "waveform.circle")
+            .symbolRenderingMode(store.isRecording ? .multicolor : .hierarchical)
+            .task {
+                openInitialPermissionsIfNeeded()
+            }
+            .onChange(of: store.isOnboardingPresented) {
+                openInitialPermissionsIfNeeded()
+            }
+    }
+
+    private func openInitialPermissionsIfNeeded() {
+        guard store.isOnboardingPresented, !didOpenInitialPermissions else { return }
+
+        didOpenInitialPermissions = true
+        NSApplication.shared.setActivationPolicy(.regular)
+        openWindow(id: WiretapWindow.library)
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 }

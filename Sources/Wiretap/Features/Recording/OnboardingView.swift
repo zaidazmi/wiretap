@@ -56,6 +56,10 @@ struct OnboardingView: View {
                     dismiss()
                 }
 
+                Button("Refresh") {
+                    store.refreshPermissions()
+                }
+
                 Button("Continue") {
                     Task {
                         await store.requestPermissions()
@@ -101,7 +105,6 @@ private struct PermissionRow: View {
                     Label(state.label, systemImage: stateIcon)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(stateColor)
-                        .labelStyle(.iconOnly)
                         .help(state.label)
                 }
                 Text(summary)

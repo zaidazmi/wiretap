@@ -275,6 +275,56 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSeekBeforePlaybackStartsIsAppliedWhenPlaybackBegins() {
+        let recording = makeRecording(title: "Preseek")
+        let playbackController = FakePlaybackController()
+        playbackController.duration = recording.duration
+        let store = WiretapStore(
+            recordings: [recording],
+            playbackController: playbackController,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.seekPlayback(for: recording, progress: 0.5)
+
+        XCTAssertEqual(store.playbackProgress(for: recording), 0.5, accuracy: 0.001)
+        XCTAssertEqual(store.playbackTime(for: recording), 15, accuracy: 0.001)
+
+        store.togglePlayback(for: recording)
+
+        XCTAssertEqual(store.playbackRecordingID, recording.id)
+        XCTAssertEqual(store.playbackTime, 15, accuracy: 0.001)
+        XCTAssertEqual(store.playbackProgress(for: recording), 0.5, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testRefreshPermissionsSynchronizesMicrophoneState() {
+        let permissionState = MutablePermissionState(.denied)
+        let store = WiretapStore(
+            permissionManager: PermissionManager(currentState: { permissionState.value }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.refreshPermissions()
+
+        XCTAssertEqual(store.permissionState, .denied)
+        XCTAssertEqual(store.microphoneState, .unavailable)
+
+        permissionState.value = .ready
+        store.notice = WiretapNotice(
+            title: "Microphone Access Denied",
+            message: "Open System Settings to allow microphone access before recording.",
+            recovery: .microphoneSettings
+        )
+
+        store.refreshPermissions()
+
+        XCTAssertEqual(store.permissionState, .ready)
+        XCTAssertEqual(store.microphoneState, .ready)
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
     func testSelectedRecordingFollowsSearchFilter() {
         let designRecording = makeRecording(title: "Design Review")
         let interviewRecording = makeRecording(title: "Customer Interview")
@@ -382,6 +432,14 @@ private enum TestCaptureWriteError: LocalizedError {
 
     var errorDescription: String? {
         "Synthetic capture write failure"
+    }
+}
+
+private final class MutablePermissionState: @unchecked Sendable {
+    var value: PermissionState
+
+    init(_ value: PermissionState) {
+        self.value = value
     }
 }
 

@@ -128,6 +128,7 @@ final class WiretapStore {
     @ObservationIgnored private var activeCaptureProgressDates: [RecordingSource: Date] = [:]
     @ObservationIgnored private var activeCaptureFailures: [RecordingSource: Error] = [:]
     @ObservationIgnored private let captureStallThreshold: TimeInterval
+    private(set) var pendingPlaybackProgress: [Recording.ID: Double] = [:]
 
     init(
         recordings: [Recording] = [],
@@ -413,6 +414,7 @@ final class WiretapStore {
 
             try repository.deleteFileIfPresent(for: recording)
             recordings.removeAll { $0.id == recording.id }
+            pendingPlaybackProgress[recording.id] = nil
             selectedRecordingID = filteredRecordings.first?.id
             saveLibrary()
         } catch {
@@ -473,30 +475,58 @@ final class WiretapStore {
 
     func togglePlayback(for recording: Recording) {
         do {
+            let requestedProgress = pendingPlaybackProgress[recording.id]
             try playbackController.toggle(recording: recording)
             syncPlaybackState()
+
+            if playbackRecordingID == recording.id, let requestedProgress {
+                playbackController.seek(to: requestedProgress)
+                syncPlaybackState()
+            }
         } catch {
             notice = WiretapNotice(title: "Playback Failed", message: error.localizedDescription)
         }
     }
 
     func seekPlayback(for recording: Recording, progress: Double) {
-        guard playbackRecordingID == recording.id else { return }
-        playbackController.seek(to: progress)
-        syncPlaybackState()
+        let clampedProgress = min(1, max(0, progress))
+
+        if playbackRecordingID == recording.id {
+            playbackController.seek(to: clampedProgress)
+            syncPlaybackState()
+        } else {
+            pendingPlaybackProgress[recording.id] = clampedProgress
+        }
     }
 
     func playbackProgress(for recording: Recording) -> Double {
         guard playbackRecordingID == recording.id, playbackDuration > 0 else {
-            return 0
+            return pendingPlaybackProgress[recording.id] ?? 0
         }
 
         return min(1, max(0, playbackTime / playbackDuration))
     }
 
+    func playbackTime(for recording: Recording) -> TimeInterval {
+        if playbackRecordingID == recording.id {
+            return playbackTime
+        }
+
+        return recording.duration * (pendingPlaybackProgress[recording.id] ?? 0)
+    }
+
     func stopPlayback() {
         playbackController.stop()
         syncPlaybackState()
+    }
+
+    func refreshPermissions() {
+        permissionState = permissionManager.currentState()
+        microphoneState = microphoneCaptureState(for: permissionState)
+
+        if permissionState == .ready, notice?.recovery == .microphoneSettings {
+            notice = nil
+        }
     }
 
     func markPermissionsReviewed() {

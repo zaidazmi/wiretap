@@ -19,7 +19,6 @@ jobs:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
       CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PATH: ${{ runner.temp }}/wiretap-signing.keychain-db
       WIRETAP_SIGN_IDENTITY: ${{ secrets.WIRETAP_SIGN_IDENTITY }}
 
     steps:
@@ -38,7 +37,9 @@ jobs:
       - name: Import Developer ID certificate
         run: |
           KEYCHAIN_PASSWORD="$(uuidgen)"
+          KEYCHAIN_PATH="$RUNNER_TEMP/wiretap-signing.keychain-db"
           CERTIFICATE_PATH="$RUNNER_TEMP/developer-id-application.p12"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
           printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"

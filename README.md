@@ -39,6 +39,19 @@ WIRETAP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" Scripts/pac
 
 To notarize the DMG, also set `WIRETAP_NOTARIZE=1`, `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`.
 
+## GitHub Releases
+
+Pushing a `v<CFBundleShortVersionString>` tag runs the release workflow, builds a release DMG, signs it with Developer ID, notarizes it, staples it, and uploads it to GitHub Releases.
+
+Required repository secrets:
+
+- `APPLE_APP_SPECIFIC_PASSWORD`
+- `APPLE_ID`
+- `APPLE_TEAM_ID`
+- `DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64`
+- `DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD`
+- `WIRETAP_SIGN_IDENTITY`
+
 ## Recording Behavior
 
 - Captures all system output audio except Wiretap itself when Core Audio can resolve the current process.

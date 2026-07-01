@@ -62,6 +62,7 @@ final class MicrophoneRecorder {
         }
 
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
+        writer?.flush()
         device = nil
         ioProcID = nil
         writer = nil

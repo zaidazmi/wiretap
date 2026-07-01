@@ -93,6 +93,7 @@ final class SystemAudioTap {
             try? system.destroyProcessTap(tap)
         }
 
+        writer?.flush()
         ioProcID = nil
         aggregateDevice = nil
         tap = nil

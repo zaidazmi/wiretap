@@ -135,6 +135,39 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testStopRecordingRetainsSourcesWhenCaptureWritesFail() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap()
+        let microphoneRecorder = FakeMicrophoneRecorder(
+            stopResult: CaptureStopResult(
+                duration: 12,
+                writeError: TestCaptureWriteError.failed
+            )
+        )
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+        store.stopRecording()
+
+        let recording = try XCTUnwrap(store.recordings.first)
+        let persistedRecording = try XCTUnwrap(try repository.loadRecordings().first)
+        XCTAssertFalse(store.isRecording)
+        XCTAssertEqual(recording.status, .interrupted)
+        XCTAssertEqual(persistedRecording.status, .interrupted)
+        XCTAssertNil(recording.fileURL)
+        XCTAssertNotNil(recording.recoveryFolderURL)
+        XCTAssertEqual(store.notice?.title, "Finalization Failed")
+        XCTAssertEqual(microphoneRecorder.stopCallCount, 1)
+        XCTAssertEqual(systemAudioTap.stopCallCount, 1)
+    }
+
+    @MainActor
     func testTickSynchronizesPlaybackTimeline() {
         let recording = makeRecording(title: "Playback")
         let playbackController = FakePlaybackController()
@@ -270,6 +303,14 @@ final class WiretapStoreTests: XCTestCase {
     }
 }
 
+private enum TestCaptureWriteError: LocalizedError {
+    case failed
+
+    var errorDescription: String? {
+        "Synthetic capture write failure"
+    }
+}
+
 @MainActor
 private final class FakePlaybackController: AudioPlaybackControlling {
     var recordingID: Recording.ID?
@@ -311,12 +352,15 @@ private final class FakeSystemAudioTap: SystemAudioTapping {
             throw startError
         }
 
+        try? Data("system".utf8).write(to: outputURL)
         isRunning = true
     }
 
-    func stop() {
+    @discardableResult
+    func stop() -> CaptureStopResult {
         stopCallCount += 1
         isRunning = false
+        return CaptureStopResult()
     }
 }
 
@@ -324,11 +368,15 @@ private final class FakeMicrophoneRecorder: MicrophoneRecording {
     var isRecording = false
     var startCallCount = 0
     var stopCallCount = 0
-    var stopDuration: TimeInterval = 0
+    var stopResult: CaptureStopResult
     let startError: Error?
 
-    init(startError: Error? = nil) {
+    init(
+        startError: Error? = nil,
+        stopResult: CaptureStopResult = CaptureStopResult()
+    ) {
         self.startError = startError
+        self.stopResult = stopResult
     }
 
     func startRecording(to url: URL) throws {
@@ -338,13 +386,14 @@ private final class FakeMicrophoneRecorder: MicrophoneRecording {
             throw startError
         }
 
+        try? Data("microphone".utf8).write(to: url)
         isRecording = true
     }
 
     @discardableResult
-    func stopRecording() -> TimeInterval {
+    func stopRecording() -> CaptureStopResult {
         stopCallCount += 1
         isRecording = false
-        return stopDuration
+        return stopResult
     }
 }

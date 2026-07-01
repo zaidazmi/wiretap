@@ -6,7 +6,7 @@ protocol SystemAudioTapping: AnyObject {
     var isRunning: Bool { get }
 
     func start(writingTo outputURL: URL) throws
-    func stop()
+    @discardableResult func stop() -> CaptureStopResult
 }
 
 final class SystemAudioTap: SystemAudioTapping {
@@ -87,7 +87,8 @@ final class SystemAudioTap: SystemAudioTapping {
         }
     }
 
-    func stop() {
+    @discardableResult
+    func stop() -> CaptureStopResult {
         if let aggregateDevice, let ioProcID {
             AudioDeviceStop(aggregateDevice.id, ioProcID)
             AudioDeviceDestroyIOProcID(aggregateDevice.id, ioProcID)
@@ -101,11 +102,12 @@ final class SystemAudioTap: SystemAudioTapping {
             try? system.destroyProcessTap(tap)
         }
 
-        writer?.flush()
+        let writeError = writer?.flush()
         ioProcID = nil
         aggregateDevice = nil
         tap = nil
         writer = nil
+        return CaptureStopResult(writeError: writeError)
     }
 
     private func currentProcessExclusionList() throws -> [AudioObjectID] {

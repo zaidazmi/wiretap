@@ -6,7 +6,7 @@ protocol MicrophoneRecording: AnyObject {
     var isRecording: Bool { get }
 
     func startRecording(to url: URL) throws
-    @discardableResult func stopRecording() -> TimeInterval
+    @discardableResult func stopRecording() -> CaptureStopResult
 }
 
 final class MicrophoneRecorder: MicrophoneRecording {
@@ -62,19 +62,19 @@ final class MicrophoneRecorder: MicrophoneRecording {
     }
 
     @discardableResult
-    func stopRecording() -> TimeInterval {
+    func stopRecording() -> CaptureStopResult {
         if let device, let ioProcID {
             AudioDeviceStop(device.id, ioProcID)
             AudioDeviceDestroyIOProcID(device.id, ioProcID)
         }
 
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
-        writer?.flush()
+        let writeError = writer?.flush()
         device = nil
         ioProcID = nil
         writer = nil
         startedAt = nil
-        return duration
+        return CaptureStopResult(duration: duration, writeError: writeError)
     }
 
     private func inputFormat(for device: AudioHardwareDevice) throws -> AVAudioFormat {

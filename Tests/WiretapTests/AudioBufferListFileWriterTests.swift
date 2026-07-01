@@ -107,6 +107,30 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertGreaterThan(duration, 0.08)
     }
 
+    func testFlushReportsQueuedWriteFailure() throws {
+        enum TestWriteError: Error {
+            case failed
+        }
+
+        let outputURL = temporaryDirectory.appendingPathComponent("write-failure.m4a")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.01)
+        let writer = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format,
+            writeBuffer: { _, _ in throw TestWriteError.failed }
+        )
+
+        writer.write(inputData: buffer.audioBufferList)
+
+        XCTAssertNotNil(writer.flush())
+    }
+
     private func makeToneBuffer(
         format: AVAudioFormat,
         duration: TimeInterval,

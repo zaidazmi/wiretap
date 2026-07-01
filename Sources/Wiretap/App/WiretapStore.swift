@@ -569,12 +569,13 @@ final class WiretapStore {
         guard isRecording else { return }
 
         let stoppedAt = Date()
-        let measuredDuration = microphoneRecorder.stopRecording()
-        systemAudioTap.stop()
-        let duration = max(elapsedSeconds, measuredDuration, 1)
+        let microphoneResult = microphoneRecorder.stopRecording()
+        let systemAudioResult = systemAudioTap.stop()
+        let duration = max(elapsedSeconds, microphoneResult.duration, systemAudioResult.duration, 1)
         let title = reason.recordingTitle(createdAt: stoppedAt)
         let captureSources = activeCaptureSources
         let sourceStartDates = activeSourceStartDates
+        let captureWriteError = microphoneResult.writeError ?? systemAudioResult.writeError
 
         guard let id = activeRecordingID,
               let finalURL = activeFinalURL,
@@ -590,6 +591,18 @@ final class WiretapStore {
         let cleanupURLs = [systemAudioURL, microphoneURL]
         switch finalization {
         case .mixSources:
+            if let captureWriteError {
+                retainInterruptedSources(
+                    id: id,
+                    title: title,
+                    durationFallback: duration,
+                    cleanupURLs: cleanupURLs,
+                    reason: reason,
+                    error: captureWriteError
+                )
+                return
+            }
+
             let inputs = mixerInputs(
                 microphoneURL: microphoneURL,
                 systemAudioURL: systemAudioURL,

@@ -13,7 +13,10 @@ final class AudioBufferListFileWriter {
         outputURL: URL,
         inputFormat: AVAudioFormat,
         bufferPoolSize: Int = 12,
-        pooledFrameCapacity: AVAudioFrameCount = 16_384
+        pooledFrameCapacity: AVAudioFrameCount = 16_384,
+        writeBuffer: @escaping (AVAudioFile, AVAudioPCMBuffer) throws -> Void = { audioFile, buffer in
+            try audioFile.write(from: buffer)
+        }
     ) throws {
         let channelCount = max(1, Int(inputFormat.channelCount))
         let outputSettings: [String: Any] = [
@@ -29,7 +32,7 @@ final class AudioBufferListFileWriter {
             settings: outputSettings,
             commonFormat: inputFormat.commonFormat,
             interleaved: inputFormat.isInterleaved
-        ))
+        ), writeBuffer: writeBuffer)
         self.bufferPool = AudioPCMBufferPool(
             format: inputFormat,
             capacity: bufferPoolSize,
@@ -50,13 +53,18 @@ final class AudioBufferListFileWriter {
         guard let pendingBuffer = copiedBuffer(from: inputData) else { return }
         writeQueue.async { [state, pendingBuffer] in
             defer { pendingBuffer.recycle() }
-            try? state.audioFile.write(from: pendingBuffer.buffer)
+            state.write(pendingBuffer.buffer)
         }
     }
 
-    func flush() {
-        guard DispatchQueue.getSpecific(key: writeQueueKey) != true else { return }
+    @discardableResult
+    func flush() -> Error? {
+        guard DispatchQueue.getSpecific(key: writeQueueKey) != true else {
+            return state.writeError
+        }
+
         writeQueue.sync {}
+        return state.writeError
     }
 
     private func copiedBuffer(from inputData: UnsafePointer<AudioBufferList>) -> PendingAudioBuffer? {
@@ -145,10 +153,39 @@ private final class AudioPCMBufferPool: @unchecked Sendable {
 }
 
 private final class WriteState: @unchecked Sendable {
-    let audioFile: AVAudioFile
+    private let audioFile: AVAudioFile
+    private let writeBuffer: (AVAudioFile, AVAudioPCMBuffer) throws -> Void
+    private let lock = NSLock()
+    private var storedWriteError: Error?
 
-    init(audioFile: AVAudioFile) {
+    init(
+        audioFile: AVAudioFile,
+        writeBuffer: @escaping (AVAudioFile, AVAudioPCMBuffer) throws -> Void
+    ) {
         self.audioFile = audioFile
+        self.writeBuffer = writeBuffer
+    }
+
+    var writeError: Error? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWriteError
+    }
+
+    func write(_ buffer: AVAudioPCMBuffer) {
+        do {
+            try writeBuffer(audioFile, buffer)
+        } catch {
+            recordWriteError(error)
+        }
+    }
+
+    private func recordWriteError(_ error: Error) {
+        lock.lock()
+        if storedWriteError == nil {
+            storedWriteError = error
+        }
+        lock.unlock()
     }
 }
 

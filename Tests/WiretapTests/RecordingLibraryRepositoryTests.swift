@@ -79,4 +79,95 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
             }
         }
     }
+
+    func testRefreshedFileStatusesMarksMissingFinalizedFiles() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let fileURL = try repository.recordingURL(for: UUID())
+        let recording = Recording(
+            title: "Missing",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_000),
+            duration: 8,
+            fileURL: fileURL,
+            fileSizeBytes: 2_048,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .finalized
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [recording])
+
+        XCTAssertEqual(refreshed.first?.status, .missingFile)
+        XCTAssertEqual(refreshed.first?.fileSizeBytes, 0)
+    }
+
+    func testRefreshedFileStatusesRestoresFoundMissingFilesAndInterruptsActiveRows() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let restoredURL = try repository.recordingURL(for: UUID())
+        try Data("audio".utf8).write(to: restoredURL)
+        let missingRecording = Recording(
+            title: "Restored",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_000),
+            duration: 8,
+            fileURL: restoredURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .missingFile
+        )
+        let activeRecording = Recording(
+            title: "Interrupted",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 8,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .recording
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [missingRecording, activeRecording])
+
+        XCTAssertEqual(refreshed[0].status, .finalized)
+        XCTAssertEqual(refreshed[0].fileSizeBytes, repository.fileSize(for: restoredURL))
+        XCTAssertEqual(refreshed[1].status, .interrupted)
+    }
+
+    func testRetainTemporaryFilesMovesSourcesAndDeleteRemovesRecoveryFolder() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+        let systemURL = try repository.temporarySourceURL(for: id, source: "system")
+        try Data("mic".utf8).write(to: microphoneURL)
+        try Data("system".utf8).write(to: systemURL)
+
+        let recoveryURL = try XCTUnwrap(repository.retainTemporaryFiles([microphoneURL, systemURL], for: id))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: microphoneURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: systemURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryURL.appendingPathComponent(microphoneURL.lastPathComponent).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryURL.appendingPathComponent(systemURL.lastPathComponent).path
+        ))
+
+        let recording = Recording(
+            id: id,
+            title: "Recovery",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_000),
+            duration: 8,
+            recoveryFolderURL: recoveryURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "Recording sources retained for recovery",
+            status: .interrupted
+        )
+
+        try repository.deleteFileIfPresent(for: recording)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
+    }
 }

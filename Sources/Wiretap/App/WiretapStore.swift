@@ -109,8 +109,14 @@ final class WiretapStore {
         permissionState = permissionManager.currentState()
 
         do {
-            recordings = try repository.loadRecordings()
+            let loadedRecordings = try repository.loadRecordings()
+            let refreshedRecordings = repository.refreshedFileStatuses(for: loadedRecordings)
+            recordings = refreshedRecordings
             selectedRecordingID = recordings.first?.id
+
+            if refreshedRecordings != loadedRecordings {
+                try repository.saveRecordings(refreshedRecordings)
+            }
         } catch {
             notice = WiretapNotice(title: "Library Error", message: error.localizedDescription)
         }
@@ -243,14 +249,16 @@ final class WiretapStore {
     }
 
     func reveal(_ recording: Recording) {
-        guard let fileURL = recording.fileURL,
-              FileManager.default.fileExists(atPath: fileURL.path)
-        else {
+        let revealURL = [recording.fileURL, recording.recoveryFolderURL]
+            .compactMap(\.self)
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+
+        guard let revealURL else {
             notice = WiretapNotice(title: "Missing File", message: RecordingLibraryError.missingFile.localizedDescription)
             return
         }
 
-        NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+        NSWorkspace.shared.activateFileViewerSelecting([revealURL])
     }
 
     func export(_ recording: Recording) {
@@ -395,22 +403,25 @@ final class WiretapStore {
             saveLibrary()
             repository.deleteTemporaryFiles(sourceURLs)
         } catch {
+            let recoveryFolderURL = try? repository.retainTemporaryFiles(sourceURLs, for: id)
             let interruptedRecording = Recording(
                 id: id,
                 title: title,
                 createdAt: Date(),
                 duration: max(durationFallback, 1),
                 fileURL: nil,
+                recoveryFolderURL: recoveryFolderURL,
                 fileSizeBytes: 0,
                 sampleRate: 48_000,
                 channelCount: 2,
-                sourceSummary: "Recording could not be finalized",
+                sourceSummary: recoveryFolderURL == nil
+                    ? "Recording could not be finalized"
+                    : "Recording sources retained for recovery",
                 status: .interrupted
             )
             recordings.insert(interruptedRecording, at: 0)
             selectedRecordingID = interruptedRecording.id
             saveLibrary()
-            repository.deleteTemporaryFiles(sourceURLs)
             notice = WiretapNotice(title: "Finalization Failed", message: error.localizedDescription)
         }
     }

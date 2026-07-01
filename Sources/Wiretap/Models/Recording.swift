@@ -34,6 +34,7 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
     var createdAt: Date
     var duration: TimeInterval
     var fileURL: URL?
+    var recoveryFolderURL: URL?
     var fileSizeBytes: Int64
     var sampleRate: Int
     var channelCount: Int
@@ -46,6 +47,7 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
         createdAt: Date,
         duration: TimeInterval,
         fileURL: URL? = nil,
+        recoveryFolderURL: URL? = nil,
         fileSizeBytes: Int64,
         sampleRate: Int,
         channelCount: Int,
@@ -57,6 +59,7 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
         self.createdAt = createdAt
         self.duration = duration
         self.fileURL = fileURL
+        self.recoveryFolderURL = recoveryFolderURL
         self.fileSizeBytes = fileSizeBytes
         self.sampleRate = sampleRate
         self.channelCount = channelCount
@@ -73,11 +76,15 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
     }
 
     var fileName: String {
-        fileURL?.lastPathComponent ?? "\(title).m4a"
+        fileURL?.lastPathComponent ?? recoveryFolderURL?.lastPathComponent ?? "\(title).m4a"
     }
 
     var folderPath: String {
-        fileURL?.deletingLastPathComponent().path ?? "Pending library location"
+        if let fileURL {
+            return fileURL.deletingLastPathComponent().path
+        }
+
+        return recoveryFolderURL?.path ?? "Pending library location"
     }
 
     var searchableText: String {
@@ -85,9 +92,10 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
             title,
             sourceSummary,
             fileName,
+            recoveryFolderURL?.path,
             status.label,
             createdAt.formatted(date: .abbreviated, time: .shortened)
-        ].joined(separator: " ")
+        ].compactMap(\.self).joined(separator: " ")
     }
 
     var technicalSummary: String {
@@ -102,6 +110,52 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
         }
 
         return uniqueSources.first?.label ?? "Recorded audio"
+    }
+}
+
+extension Recording {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case createdAt
+        case duration
+        case fileURL
+        case recoveryFolderURL
+        case fileSizeBytes
+        case sampleRate
+        case channelCount
+        case sourceSummary
+        case status
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        duration = try container.decode(TimeInterval.self, forKey: .duration)
+        fileURL = try container.decodeIfPresent(URL.self, forKey: .fileURL)
+        recoveryFolderURL = try container.decodeIfPresent(URL.self, forKey: .recoveryFolderURL)
+        fileSizeBytes = try container.decode(Int64.self, forKey: .fileSizeBytes)
+        sampleRate = try container.decode(Int.self, forKey: .sampleRate)
+        channelCount = try container.decode(Int.self, forKey: .channelCount)
+        sourceSummary = try container.decode(String.self, forKey: .sourceSummary)
+        status = try container.decode(Status.self, forKey: .status)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(duration, forKey: .duration)
+        try container.encodeIfPresent(fileURL, forKey: .fileURL)
+        try container.encodeIfPresent(recoveryFolderURL, forKey: .recoveryFolderURL)
+        try container.encode(fileSizeBytes, forKey: .fileSizeBytes)
+        try container.encode(sampleRate, forKey: .sampleRate)
+        try container.encode(channelCount, forKey: .channelCount)
+        try container.encode(sourceSummary, forKey: .sourceSummary)
+        try container.encode(status, forKey: .status)
     }
 }
 

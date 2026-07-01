@@ -20,6 +20,10 @@ struct RecordingLibraryRepository {
         applicationSupportDirectory.appendingPathComponent("Recordings", isDirectory: true)
     }
 
+    var recoveryDirectory: URL {
+        applicationSupportDirectory.appendingPathComponent("Recovery", isDirectory: true)
+    }
+
     private var metadataURL: URL {
         applicationSupportDirectory.appendingPathComponent("Recordings.json")
     }
@@ -27,6 +31,10 @@ struct RecordingLibraryRepository {
     func prepare() throws {
         try FileManager.default.createDirectory(
             at: recordingsDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: recoveryDirectory,
             withIntermediateDirectories: true
         )
     }
@@ -57,6 +65,40 @@ struct RecordingLibraryRepository {
         return recordings.sorted { $0.createdAt > $1.createdAt }
     }
 
+    func refreshedFileStatuses(for recordings: [Recording]) -> [Recording] {
+        recordings.map { recording in
+            var refreshed = recording
+
+            switch recording.status {
+            case .finalized:
+                guard let fileURL = recording.fileURL,
+                      FileManager.default.fileExists(atPath: fileURL.path)
+                else {
+                    refreshed.status = .missingFile
+                    refreshed.fileSizeBytes = 0
+                    return refreshed
+                }
+
+                refreshed.fileSizeBytes = fileSize(for: fileURL)
+
+            case .missingFile:
+                if let fileURL = recording.fileURL,
+                   FileManager.default.fileExists(atPath: fileURL.path) {
+                    refreshed.status = .finalized
+                    refreshed.fileSizeBytes = fileSize(for: fileURL)
+                }
+
+            case .recording:
+                refreshed.status = .interrupted
+
+            case .interrupted:
+                break
+            }
+
+            return refreshed
+        }
+    }
+
     func saveRecordings(_ recordings: [Recording]) throws {
         try prepare()
         let data = try JSONEncoder.wiretap.encode(recordings)
@@ -77,17 +119,22 @@ struct RecordingLibraryRepository {
             .appendingPathExtension("m4a")
     }
 
+    func recoveryURL(for id: Recording.ID) throws -> URL {
+        try prepare()
+        return recoveryDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+
     func fileSize(for url: URL) -> Int64 {
         let values = try? url.resourceValues(forKeys: [.fileSizeKey])
         return Int64(values?.fileSize ?? 0)
     }
 
     func deleteFileIfPresent(for recording: Recording) throws {
-        guard let fileURL = recording.fileURL,
-              FileManager.default.fileExists(atPath: fileURL.path)
-        else { return }
+        let urls = [recording.fileURL, recording.recoveryFolderURL].compactMap(\.self)
 
-        try FileManager.default.removeItem(at: fileURL)
+        for url in urls where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
     }
 
     func copyRecording(_ recording: Recording, to destinationURL: URL) throws {
@@ -108,6 +155,32 @@ struct RecordingLibraryRepository {
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    func retainTemporaryFiles(_ urls: [URL], for id: Recording.ID) throws -> URL? {
+        let recoveryURL = try recoveryURL(for: id)
+        try FileManager.default.createDirectory(
+            at: recoveryURL,
+            withIntermediateDirectories: true
+        )
+
+        var didRetainFile = false
+        for url in urls where FileManager.default.fileExists(atPath: url.path) {
+            let destinationURL = recoveryURL.appendingPathComponent(url.lastPathComponent)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+
+            try FileManager.default.moveItem(at: url, to: destinationURL)
+            didRetainFile = true
+        }
+
+        if didRetainFile {
+            return recoveryURL
+        }
+
+        try? FileManager.default.removeItem(at: recoveryURL)
+        return nil
     }
 }
 

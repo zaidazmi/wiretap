@@ -20,6 +20,8 @@ struct RecordingDetailView: View {
             Divider()
 
             RecordingActionBar(
+                canReveal: recording.fileURL != nil || recording.recoveryFolderURL != nil,
+                canExport: recording.status == .finalized && recording.fileURL != nil,
                 onReveal: { store.reveal(recording) },
                 onExport: { store.export(recording) },
                 onShare: { store.share(recording) },
@@ -88,6 +90,9 @@ struct RecordingDetailView: View {
                 DetailPanel(title: "File", systemImage: "doc.fill") {
                     MetadataRow(title: "Name", value: recording.fileName)
                     MetadataRow(title: "Location", value: recording.folderPath)
+                    if let recoveryFolderURL = recording.recoveryFolderURL {
+                        MetadataRow(title: "Recovery", value: recoveryFolderURL.path)
+                    }
                     MetadataRow(title: "Size", value: recording.fileSizeText)
                 }
 
@@ -250,6 +255,8 @@ private struct StatusCapsule: View {
 }
 
 private struct RecordingActionBar: View {
+    let canReveal: Bool
+    let canExport: Bool
     let onReveal: () -> Void
     let onExport: () -> Void
     let onShare: () -> Void
@@ -260,12 +267,17 @@ private struct RecordingActionBar: View {
             Button(action: onReveal) {
                 Label("Reveal", systemImage: "folder")
             }
+            .disabled(!canReveal)
+
             Button(action: onExport) {
                 Label("Export", systemImage: "square.and.arrow.down")
             }
+            .disabled(!canExport)
+
             Button(action: onShare) {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
+            .disabled(!canExport)
 
             Spacer()
 

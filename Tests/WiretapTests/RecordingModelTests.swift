@@ -32,4 +32,34 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertTrue(recording.searchableText.localizedStandardContains("Missing File"))
         XCTAssertTrue(recording.searchableText.localizedStandardContains("System audio"))
     }
+
+    func testDecodingOlderMetadataDefaultsRecoveryFolderToNil() throws {
+        let json = """
+        {
+          "channelCount" : 2,
+          "createdAt" : "2026-07-01T12:00:00Z",
+          "duration" : 12,
+          "fileSizeBytes" : 1024,
+          "fileURL" : "file:///tmp/Wiretap/Recording.m4a",
+          "id" : "11111111-1111-1111-1111-111111111111",
+          "sampleRate" : 48000,
+          "sourceSummary" : "System audio + default microphone",
+          "status" : "finalized",
+          "title" : "Legacy"
+        }
+        """
+
+        let recording = try JSONDecoder.wiretapTest.decode(Recording.self, from: Data(json.utf8))
+
+        XCTAssertNil(recording.recoveryFolderURL)
+        XCTAssertEqual(recording.title, "Legacy")
+    }
+}
+
+private extension JSONDecoder {
+    static var wiretapTest: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
 }

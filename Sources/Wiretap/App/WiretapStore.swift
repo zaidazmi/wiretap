@@ -259,6 +259,7 @@ final class WiretapStore {
             try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
 
             let id = UUID()
+            let startedAt = Date()
             let finalURL = try repository.recordingURL(for: id)
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
@@ -291,9 +292,25 @@ final class WiretapStore {
             activeSystemAudioURL = systemAudioURL
             activeCaptureSources = captureSources
             isRecording = true
-            recordingStartedAt = Date()
+            recordingStartedAt = startedAt
             elapsedSeconds = 0
             permissionState = .ready
+            upsertRecording(
+                Recording(
+                    id: id,
+                    title: "Recording \(startedAt.formatted(date: .abbreviated, time: .shortened))",
+                    createdAt: startedAt,
+                    duration: 0,
+                    fileURL: finalURL,
+                    fileSizeBytes: 0,
+                    sampleRate: 48_000,
+                    channelCount: 2,
+                    sourceSummary: Recording.sourceSummary(for: Array(captureSources)),
+                    status: .recording
+                )
+            )
+            selectedRecordingID = id
+            saveLibrary()
         } catch {
             microphoneRecorder.stopRecording()
             systemAudioTap.stop()
@@ -497,6 +514,14 @@ final class WiretapStore {
         playbackDuration = playbackController.duration
     }
 
+    private func upsertRecording(_ recording: Recording) {
+        if let index = recordings.firstIndex(where: { $0.id == recording.id }) {
+            recordings[index] = recording
+        } else {
+            recordings.insert(recording, at: 0)
+        }
+    }
+
     private func finishActiveRecording(
         reason: RecordingStopReason,
         finalization: RecordingFinalizationStrategy
@@ -581,7 +606,7 @@ final class WiretapStore {
                 status: reason.status
             )
 
-            recordings.insert(recording, at: 0)
+            upsertRecording(recording)
             selectedRecordingID = recording.id
             saveLibrary()
             repository.deleteTemporaryFiles(cleanupURLs)
@@ -621,7 +646,7 @@ final class WiretapStore {
             sourceSummary: reason.retainedSourceSummary(didRetainSources: didRetainSources),
             status: .interrupted
         )
-        recordings.insert(interruptedRecording, at: 0)
+        upsertRecording(interruptedRecording)
         selectedRecordingID = interruptedRecording.id
         saveLibrary()
         notice = reason.failureNotice(error: error, didRetainSources: didRetainSources)

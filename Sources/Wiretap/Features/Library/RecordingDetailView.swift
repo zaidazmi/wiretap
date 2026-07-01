@@ -21,7 +21,9 @@ struct RecordingDetailView: View {
 
             RecordingActionBar(
                 canReveal: recording.fileURL != nil || recording.recoveryFolderURL != nil,
-                canExport: recording.fileURL != nil,
+                canExport: recording.fileURL != nil
+                    && recording.status != .recording
+                    && recording.status != .missingFile,
                 onReveal: { store.reveal(recording) },
                 onExport: { store.export(recording) },
                 onShare: { store.share(recording) },

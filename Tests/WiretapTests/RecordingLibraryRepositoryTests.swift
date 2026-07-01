@@ -227,6 +227,70 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(refreshed[1].status, .interrupted)
     }
 
+    func testRefreshedFileStatusesFinalizesActiveRowWhenOutputExists() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let finalURL = try repository.recordingURL(for: id)
+        try Data("mixed audio".utf8).write(to: finalURL)
+        let activeRecording = Recording(
+            id: id,
+            title: "Active",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 8,
+            fileURL: finalURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .recording
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [activeRecording])
+
+        XCTAssertEqual(refreshed.first?.status, .finalized)
+        XCTAssertEqual(refreshed.first?.fileSizeBytes, repository.fileSize(for: finalURL))
+    }
+
+    func testRefreshedFileStatusesRetainsActiveRecordingSourceFiles() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let finalURL = try repository.recordingURL(for: id)
+        let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+        let systemURL = try repository.temporarySourceURL(for: id, source: "system")
+        try Data("mic".utf8).write(to: microphoneURL)
+        try Data("system".utf8).write(to: systemURL)
+        let activeRecording = Recording(
+            id: id,
+            title: "Active",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 0,
+            fileURL: finalURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .recording
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [activeRecording])
+        let recoveryFolderURL = try XCTUnwrap(refreshed.first?.recoveryFolderURL)
+
+        XCTAssertEqual(refreshed.first?.status, .interrupted)
+        XCTAssertNil(refreshed.first?.fileURL)
+        XCTAssertEqual(
+            refreshed.first?.sourceSummary,
+            RecordingInterruptionReason.unexpectedShutdown.recoverySummary
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: microphoneURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: systemURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryFolderURL.appendingPathComponent(microphoneURL.lastPathComponent).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryFolderURL.appendingPathComponent(systemURL.lastPathComponent).path
+        ))
+    }
+
     func testRetainTemporaryFilesMovesSourcesAndDeleteRemovesRecoveryFolder() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()

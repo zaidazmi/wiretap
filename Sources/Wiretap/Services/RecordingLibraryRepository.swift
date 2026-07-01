@@ -100,7 +100,25 @@ struct RecordingLibraryRepository {
                 }
 
             case .recording:
+                if let fileURL = recording.fileURL,
+                   FileManager.default.fileExists(atPath: fileURL.path) {
+                    refreshed.status = .finalized
+                    refreshed.fileSizeBytes = fileSize(for: fileURL)
+                    return refreshed
+                }
+
+                let recoveryFolderURL = try? retainTemporaryFiles(
+                    temporarySourceURLs(for: recording.id),
+                    for: recording.id
+                )
                 refreshed.status = .interrupted
+                refreshed.fileURL = nil
+                refreshed.recoveryFolderURL = recoveryFolderURL
+                refreshed.fileSizeBytes = 0
+                refreshed.duration = max(recording.duration, 1)
+                refreshed.sourceSummary = recoveryFolderURL == nil
+                    ? "Interrupted - recording could not be recovered"
+                    : RecordingInterruptionReason.unexpectedShutdown.recoverySummary
 
             case .interrupted:
                 break
@@ -213,6 +231,12 @@ struct RecordingLibraryRepository {
 
         try? FileManager.default.removeItem(at: recoveryURL)
         return nil
+    }
+
+    private func temporarySourceURLs(for id: Recording.ID) -> [URL] {
+        ["system", "microphone"].compactMap { source in
+            try? temporarySourceURL(for: id, source: source)
+        }
     }
 
     private func makeModelContext() throws -> ModelContext {

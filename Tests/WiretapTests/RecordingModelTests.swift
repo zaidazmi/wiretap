@@ -62,6 +62,10 @@ final class RecordingModelTests: XCTestCase {
             RecordingInterruptionReason.sessionInactive.noticeMessage
                 .localizedStandardContains("session changed")
         )
+        XCTAssertEqual(
+            RecordingInterruptionReason.unexpectedShutdown.recoverySummary,
+            "Interrupted - source files retained after unexpected shutdown"
+        )
     }
 
     func testDecodingOlderMetadataDefaultsRecoveryFolderToNil() throws {

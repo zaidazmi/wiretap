@@ -22,10 +22,10 @@ final class LibraryWindowController {
 
     private func makeWindow(store: WiretapStore) -> NSWindow {
         let rootView = LibraryView(store: store)
-            .frame(minWidth: 920, minHeight: 620)
+            .frame(minWidth: 1040, minHeight: 680)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false

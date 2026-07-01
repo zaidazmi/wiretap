@@ -4,14 +4,20 @@ struct LibraryView: View {
     @Bindable var store: WiretapStore
 
     var body: some View {
-        NavigationSplitView {
-            RecordingSidebar(store: store)
-                .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 420)
-        } detail: {
-            if let recording = store.selectedRecording {
-                RecordingDetailView(recording: recording, store: store)
-            } else {
-                EmptyLibraryView(isFiltering: !store.searchText.isEmpty)
+        VStack(spacing: 0) {
+            LibraryStatusStrip(store: store)
+
+            Divider()
+
+            NavigationSplitView {
+                RecordingSidebar(store: store)
+                    .navigationSplitViewColumnWidth(min: 320, ideal: 360, max: 440)
+            } detail: {
+                if let recording = store.selectedRecording {
+                    RecordingDetailView(recording: recording, store: store)
+                } else {
+                    EmptyLibraryView(isFiltering: !store.searchText.isEmpty)
+                }
             }
         }
         .toolbar {
@@ -38,24 +44,77 @@ struct LibraryView: View {
     }
 }
 
+private struct LibraryStatusStrip: View {
+    let store: WiretapStore
+
+    var body: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 10) {
+                RecordingStatusBadge(isRecording: store.isRecording)
+                    .font(.title3)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.recordingTitle)
+                        .font(.headline)
+                    Text(store.recordingSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            LibraryMetric(title: "Elapsed", value: store.isRecording ? store.elapsedText : "00:00")
+            LibraryMetric(title: "Recordings", value: "\(store.recordings.count)")
+            LibraryMetric(title: "Duration", value: store.totalDurationText)
+            LibraryMetric(title: "Size", value: store.totalFileSizeText)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.bar)
+    }
+}
+
+private struct LibraryMetric: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(minWidth: 76, alignment: .trailing)
+    }
+}
+
 private struct RecordingSidebar: View {
     @Bindable var store: WiretapStore
 
     var body: some View {
         VStack(spacing: 0) {
-            LibraryHeader(recordingCount: store.recordings.count)
+            LibraryHeader(store: store)
 
             if store.filteredRecordings.isEmpty {
                 EmptyLibraryView(isFiltering: !store.searchText.isEmpty)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $store.selectedRecordingID) {
-                    ForEach(store.filteredRecordings) { recording in
-                        RecordingRowView(recording: recording)
-                            .tag(recording.id)
+                    Section("Recordings") {
+                        ForEach(store.filteredRecordings) { recording in
+                            RecordingRowView(recording: recording)
+                                .tag(recording.id)
+                        }
                     }
                 }
                 .listStyle(.sidebar)
+                .environment(\.defaultMinListRowHeight, 70)
             }
         }
         .searchable(text: $store.searchText, prompt: "Search recordings")
@@ -63,31 +122,56 @@ private struct RecordingSidebar: View {
 }
 
 private struct LibraryHeader: View {
-    let recordingCount: Int
+    let store: WiretapStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Library", systemImage: "rectangle.stack.fill")
-                    .font(.title2.weight(.semibold))
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(.tint)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Wiretap")
+                        .font(.title2.weight(.semibold))
+                    Text("Local audio library")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Spacer()
-
-                Text("\(recordingCount)")
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.secondary)
             }
 
-            Text("Local recordings")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                SidebarStat(title: "Last", value: store.lastRecordingText)
+                SidebarStat(title: "Stored", value: store.totalFileSizeText)
+            }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
+        .padding(18)
+    }
+}
+
+private struct SidebarStat: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
 #Preview {
     LibraryView(store: .preview)
-        .frame(width: 1080, height: 720)
+        .frame(width: 1180, height: 760)
 }

@@ -4,54 +4,53 @@ struct RecordingRowView: View {
     let recording: Recording
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(recording.title)
-                    .font(.headline)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                Text(recording.durationText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(statusColor.opacity(0.12))
+                Image(systemName: statusIcon)
+                    .foregroundStyle(statusColor)
             }
+            .frame(width: 34, height: 34)
 
-            HStack(spacing: 8) {
-                StatusPill(status: recording.status)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(recording.title)
+                        .font(.headline)
+                        .lineLimit(1)
 
-                Text(recording.createdAt, format: .dateTime.month().day().hour().minute())
-                    .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
 
-                Text(recording.fileSizeText)
-                    .foregroundStyle(.secondary)
+                    Text(recording.durationText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Text(recording.status.label)
+                        .foregroundStyle(statusColor)
+                    Text(recording.createdAt, format: .dateTime.month().day().hour().minute())
+                    Text(recording.fileSizeText)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
-            .font(.caption)
         }
         .padding(.vertical, 8)
     }
-}
-
-private struct StatusPill: View {
-    let status: Recording.Status
-
-    var body: some View {
-        Label(status.label, systemImage: statusIcon)
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(statusColor)
-    }
 
     private var statusIcon: String {
-        switch status {
-        case .finalized: "checkmark.circle.fill"
+        switch recording.status {
+        case .finalized: "checkmark"
         case .recording: "record.circle.fill"
-        case .interrupted: "exclamationmark.triangle.fill"
-        case .missingFile: "questionmark.folder.fill"
+        case .interrupted: "exclamationmark"
+        case .missingFile: "questionmark"
         }
     }
 
     private var statusColor: Color {
-        switch status {
+        switch recording.status {
         case .finalized: .green
         case .recording: .red
         case .interrupted: .orange

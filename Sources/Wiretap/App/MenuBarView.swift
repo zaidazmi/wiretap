@@ -5,30 +5,21 @@ struct MenuBarView: View {
     let libraryWindowController: LibraryWindowController
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                RecordingStatusBadge(isRecording: store.isRecording)
+        VStack(spacing: 0) {
+            MenuHeader(store: store)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(store.isRecording ? "Recording" : "Ready")
-                        .font(.headline)
-                    Text(store.isRecording ? store.elapsedText : "System output + default mic")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
+            Divider()
 
-                Spacer()
+            VStack(alignment: .leading, spacing: 14) {
+                MenuRecordingPanel(store: store)
+                RecordingControlsView(store: store)
+                MenuCaptureSources(permissionState: store.permissionState)
             }
-
-            RecordingControlsView(store: store)
-
-            Divider()
-
-            RecordingPermissionsView()
+            .padding(16)
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 8) {
                 Button {
                     libraryWindowController.show(store: store)
                 } label: {
@@ -44,14 +35,126 @@ struct MenuBarView: View {
                 }
             }
             .buttonStyle(.plain)
+            .padding(16)
         }
-        .padding(18)
-        .frame(width: 320)
+        .frame(width: 360)
         .task(id: store.isRecording) {
             while store.isRecording {
                 store.tick()
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+    }
+}
+
+private struct MenuHeader: View {
+    let store: WiretapStore
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RecordingStatusBadge(isRecording: store.isRecording)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Wiretap")
+                    .font(.headline)
+                Text(store.recordingSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text(store.isRecording ? "Live" : "Idle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(store.isRecording ? .red : .secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(store.isRecording ? Color.red.opacity(0.12) : Color.secondary.opacity(0.12))
+                )
+        }
+        .padding(16)
+    }
+}
+
+private struct MenuRecordingPanel: View {
+    let store: WiretapStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(store.recordingTitle)
+                .font(.subheadline.weight(.semibold))
+
+            Text(store.isRecording ? store.elapsedText : "00:00")
+                .font(.system(size: 38, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+
+            HStack(spacing: 10) {
+                MenuMetric(title: "Recordings", value: "\(store.recordings.count)")
+                MenuMetric(title: "Library", value: store.totalFileSizeText)
+            }
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct MenuMetric: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct MenuCaptureSources: View {
+    let permissionState: PermissionState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Capture")
+                .font(.subheadline.weight(.semibold))
+
+            SourceRow(title: "System audio", systemImage: "speaker.wave.2.fill")
+            SourceRow(title: "Default microphone", systemImage: "mic.fill")
+
+            HStack {
+                Image(systemName: permissionState == .ready ? "checkmark.shield.fill" : "lock.shield")
+                    .foregroundStyle(permissionState == .ready ? .green : .secondary)
+                Text(permissionState.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct SourceRow: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+            Text(title)
+                .font(.callout)
+            Spacer()
+            Image(systemName: "checkmark.circle")
+                .foregroundStyle(.secondary)
         }
     }
 }

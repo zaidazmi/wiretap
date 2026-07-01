@@ -12,6 +12,7 @@ struct RecordingControlsView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .tint(.red)
             .disabled(store.isRecording || !store.canRecord)
 
@@ -22,6 +23,7 @@ struct RecordingControlsView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .controlSize(.large)
             .disabled(!store.isRecording)
         }
     }

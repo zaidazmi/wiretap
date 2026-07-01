@@ -38,6 +38,37 @@ final class WiretapStore {
         DurationFormatter.clock.string(from: elapsedSeconds)
     }
 
+    var totalDurationText: String {
+        DurationFormatter.clock.string(from: recordings.reduce(0) { $0 + $1.duration })
+    }
+
+    var totalFileSizeText: String {
+        ByteCountFormatter.string(
+            fromByteCount: recordings.reduce(Int64(0)) { $0 + $1.fileSizeBytes },
+            countStyle: .file
+        )
+    }
+
+    var lastRecordingText: String {
+        guard let createdAt = recordings.map(\.createdAt).max() else {
+            return "No recordings yet"
+        }
+
+        return createdAt.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var recordingTitle: String {
+        isRecording ? "Recording in progress" : "Ready to record"
+    }
+
+    var recordingSubtitle: String {
+        if isRecording {
+            return "System output + default microphone"
+        }
+
+        return permissionState == .ready ? "Permissions ready" : "Permissions pending review"
+    }
+
     var canRecord: Bool {
         permissionState != .denied
     }

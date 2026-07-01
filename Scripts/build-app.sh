@@ -3,6 +3,7 @@ set -euo pipefail
 
 CONFIGURATION="${1:-release}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SIGN_IDENTITY="${WIRETAP_SIGN_IDENTITY:--}"
 
 cd "$REPO_ROOT"
 
@@ -24,8 +25,16 @@ cat > "$APP_DIR/Contents/PkgInfo" <<'PKGINFO'
 APPL????
 PKGINFO
 
-codesign --force --sign - \
-    --entitlements "$REPO_ROOT/Packaging/Wiretap.entitlements" \
-    "$APP_DIR"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    codesign --force --sign - \
+        --entitlements "$REPO_ROOT/Packaging/Wiretap.entitlements" \
+        "$APP_DIR"
+else
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --options runtime \
+        --timestamp \
+        --entitlements "$REPO_ROOT/Packaging/Wiretap.entitlements" \
+        "$APP_DIR"
+fi
 
 echo "Built $APP_DIR"

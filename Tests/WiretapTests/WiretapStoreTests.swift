@@ -295,6 +295,31 @@ final class WiretapStoreTests: XCTestCase {
         XCTAssertEqual(store.playbackRecordingID, recording.id)
         XCTAssertEqual(store.playbackTime, 15, accuracy: 0.001)
         XCTAssertEqual(store.playbackProgress(for: recording), 0.5, accuracy: 0.001)
+        XCTAssertNil(store.pendingPlaybackProgress[recording.id])
+    }
+
+    @MainActor
+    func testPrePlaybackSeekDoesNotReapplyAfterPauseResume() {
+        let recording = makeRecording(title: "Resume")
+        let playbackController = FakePlaybackController()
+        playbackController.duration = recording.duration
+        let store = WiretapStore(
+            recordings: [recording],
+            playbackController: playbackController,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.seekPlayback(for: recording, progress: 0.5)
+        store.togglePlayback(for: recording)
+        store.seekPlayback(for: recording, progress: 0.75)
+
+        XCTAssertEqual(store.playbackTime, 22.5, accuracy: 0.001)
+
+        store.togglePlayback(for: recording)
+        playbackController.currentTime = 23
+        store.togglePlayback(for: recording)
+
+        XCTAssertEqual(store.playbackTime, 23, accuracy: 0.001)
     }
 
     @MainActor

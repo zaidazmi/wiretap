@@ -481,6 +481,7 @@ final class WiretapStore {
 
             if playbackRecordingID == recording.id, let requestedProgress {
                 playbackController.seek(to: requestedProgress)
+                pendingPlaybackProgress[recording.id] = nil
                 syncPlaybackState()
             }
         } catch {

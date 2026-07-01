@@ -33,6 +33,7 @@ final class WiretapStore {
     @ObservationIgnored private var activeMicrophoneURL: URL?
     @ObservationIgnored private var activeSystemAudioURL: URL?
     @ObservationIgnored private var activeCaptureSources = Set<RecordingSource>()
+    @ObservationIgnored private var activeSourceStartDates: [RecordingSource: Date] = [:]
 
     init(
         recordings: [Recording] = [],
@@ -186,6 +187,7 @@ final class WiretapStore {
                 try systemAudioTap.start(writingTo: systemAudioURL)
                 systemAudioState = .ready
                 captureSources.insert(.systemAudio)
+                activeSourceStartDates[.systemAudio] = Date()
             } catch {
                 systemAudioState = .unavailable
                 notice = WiretapNotice(
@@ -199,6 +201,7 @@ final class WiretapStore {
             try microphoneRecorder.startRecording(to: microphoneURL)
             microphoneState = .ready
             captureSources.insert(.microphone)
+            activeSourceStartDates[.microphone] = Date()
 
             activeRecordingID = id
             activeFinalURL = finalURL
@@ -227,6 +230,7 @@ final class WiretapStore {
         let duration = max(elapsedSeconds, measuredDuration, 1)
         let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
         let captureSources = activeCaptureSources
+        let sourceStartDates = activeSourceStartDates
 
         guard let id = activeRecordingID,
               let finalURL = activeFinalURL,
@@ -239,9 +243,27 @@ final class WiretapStore {
 
         resetRecordingState()
 
-        var inputs = [AudioMixerInput(url: microphoneURL, source: .microphone)]
+        let referenceStartDate = sourceStartDates.values.min()
+        var inputs = [
+            AudioMixerInput(
+                url: microphoneURL,
+                source: .microphone,
+                startOffset: sourceOffset(for: .microphone, from: sourceStartDates, referenceDate: referenceStartDate)
+            )
+        ]
         if captureSources.contains(.systemAudio) {
-            inputs.insert(AudioMixerInput(url: systemAudioURL, source: .systemAudio), at: 0)
+            inputs.insert(
+                AudioMixerInput(
+                    url: systemAudioURL,
+                    source: .systemAudio,
+                    startOffset: sourceOffset(
+                        for: .systemAudio,
+                        from: sourceStartDates,
+                        referenceDate: referenceStartDate
+                    )
+                ),
+                at: 0
+            )
         }
 
         Task {
@@ -427,6 +449,7 @@ final class WiretapStore {
         activeMicrophoneURL = nil
         activeSystemAudioURL = nil
         activeCaptureSources = []
+        activeSourceStartDates = [:]
     }
 
     private func syncPlaybackState() {
@@ -509,6 +532,18 @@ enum WiretapNoticeRecovery: Equatable {
 }
 
 private extension WiretapStore {
+    func sourceOffset(
+        for source: RecordingSource,
+        from sourceStartDates: [RecordingSource: Date],
+        referenceDate: Date?
+    ) -> TimeInterval {
+        guard let sourceStartDate = sourceStartDates[source],
+              let referenceDate
+        else { return 0 }
+
+        return max(0, sourceStartDate.timeIntervalSince(referenceDate))
+    }
+
     func microphoneCaptureState(for permissionState: PermissionState) -> CaptureSourceState {
         switch permissionState {
         case .ready:

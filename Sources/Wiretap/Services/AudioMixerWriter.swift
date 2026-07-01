@@ -17,10 +17,12 @@ struct AudioMixerWriter {
             try FileManager.default.removeItem(at: outputURL)
         }
 
-        let longestDuration = usableInputs.map(\.duration).max() ?? 0
+        let timelineDuration = usableInputs
+            .map { $0.input.startOffset + $0.duration }
+            .max() ?? 0
         try render(
             usableInputs: usableInputs,
-            longestDuration: longestDuration,
+            timelineDuration: timelineDuration,
             outputURL: outputURL
         )
 
@@ -61,7 +63,7 @@ struct AudioMixerWriter {
 
     private func render(
         usableInputs: [UsableAudioInput],
-        longestDuration: TimeInterval,
+        timelineDuration: TimeInterval,
         outputURL: URL
     ) throws {
         guard let outputFormat = AVAudioFormat(
@@ -77,9 +79,13 @@ struct AudioMixerWriter {
         let playerNodes = try usableInputs.map { input in
             let playerNode = AVAudioPlayerNode()
             let file = try AVAudioFile(forReading: input.input.url)
+            let startFrame = AVAudioFramePosition(round(input.input.startOffset * outputSampleRate))
+            let startTime = startFrame > 0
+                ? AVAudioTime(sampleTime: startFrame, atRate: outputSampleRate)
+                : nil
             engine.attach(playerNode)
             engine.connect(playerNode, to: engine.mainMixerNode, format: file.processingFormat)
-            playerNode.scheduleFile(file, at: nil)
+            playerNode.scheduleFile(file, at: startTime)
             return playerNode
         }
 
@@ -104,7 +110,7 @@ struct AudioMixerWriter {
 
         let targetFrames = max(
             AVAudioFramePosition(1),
-            AVAudioFramePosition(ceil(longestDuration * outputSampleRate))
+            AVAudioFramePosition(ceil(timelineDuration * outputSampleRate))
         )
 
         defer {
@@ -170,6 +176,13 @@ private struct UsableAudioInput {
 struct AudioMixerInput: Sendable, Equatable {
     var url: URL
     var source: RecordingSource
+    var startOffset: TimeInterval
+
+    init(url: URL, source: RecordingSource, startOffset: TimeInterval = 0) {
+        self.url = url
+        self.source = source
+        self.startOffset = max(0, startOffset)
+    }
 }
 
 struct AudioMixResult: Sendable, Equatable {

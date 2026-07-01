@@ -160,6 +160,31 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testCopyRecordingThrowsWhenSourceFileIsMissing() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let fileURL = try repository.recordingURL(for: UUID())
+        let recording = Recording(
+            title: "Missing File",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_000),
+            duration: 1,
+            fileURL: fileURL,
+            fileSizeBytes: 2_048,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "Default microphone",
+            status: .finalized
+        )
+        let destinationURL = temporaryDirectory.appendingPathComponent("Exported.m4a")
+
+        XCTAssertThrowsError(try repository.copyRecording(recording, to: destinationURL)) { error in
+            guard case RecordingLibraryError.missingFile = error else {
+                XCTFail("Expected missing file error, got \(error)")
+                return
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destinationURL.path))
+    }
+
     func testDiskSpacePreflightThrowsWhenRequirementIsTooLarge() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
 

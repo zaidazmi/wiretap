@@ -93,6 +93,36 @@ private struct RecordingStartFailure: LocalizedError {
 }
 
 @MainActor
+struct RecordingFileActions {
+    var reveal: (URL) -> Void
+    var chooseExportDestination: (String) -> URL?
+    var share: ([URL]) -> Bool
+
+    static let live = RecordingFileActions(
+        reveal: { url in
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        },
+        chooseExportDestination: { fileName in
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.mpeg4Audio]
+            panel.nameFieldStringValue = fileName
+            panel.canCreateDirectories = true
+
+            guard panel.runModal() == .OK else { return nil }
+            return panel.url
+        },
+        share: { urls in
+            guard let contentView = NSApplication.shared.keyWindow?.contentView else {
+                return false
+            }
+
+            NSSharingServicePicker(items: urls).show(relativeTo: .zero, of: contentView, preferredEdge: .minY)
+            return true
+        }
+    )
+}
+
+@MainActor
 @Observable
 final class WiretapStore {
     var recordings: [Recording]
@@ -117,6 +147,7 @@ final class WiretapStore {
     @ObservationIgnored private let systemAudioTap: any SystemAudioTapping
     @ObservationIgnored private let mixerWriter: AudioMixerWriter
     @ObservationIgnored private let permissionManager: PermissionManager
+    @ObservationIgnored private let fileActions: RecordingFileActions
     @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
     @ObservationIgnored private var activeRecordingID: Recording.ID?
     @ObservationIgnored private var activeFinalURL: URL?
@@ -138,6 +169,7 @@ final class WiretapStore {
         systemAudioTap: any SystemAudioTapping = SystemAudioTap(),
         mixerWriter: AudioMixerWriter = AudioMixerWriter(),
         permissionManager: PermissionManager = PermissionManager(),
+        fileActions: RecordingFileActions = .live,
         minimumFreeDiskSpaceBytes: Int64 = 1_000_000_000,
         captureStallThreshold: TimeInterval = 12
     ) {
@@ -149,6 +181,7 @@ final class WiretapStore {
         self.systemAudioTap = systemAudioTap
         self.mixerWriter = mixerWriter
         self.permissionManager = permissionManager
+        self.fileActions = fileActions
         self.minimumFreeDiskSpaceBytes = minimumFreeDiskSpaceBytes
         self.captureStallThreshold = captureStallThreshold
     }
@@ -434,21 +467,18 @@ final class WiretapStore {
             return
         }
 
-        NSWorkspace.shared.activateFileViewerSelecting([revealURL])
+        fileActions.reveal(revealURL)
     }
 
     func export(_ recording: Recording) {
-        guard recording.fileURL != nil else {
+        guard let fileURL = recording.fileURL,
+              FileManager.default.fileExists(atPath: fileURL.path)
+        else {
             notice = WiretapNotice(title: "Missing File", message: RecordingLibraryError.missingFile.localizedDescription)
             return
         }
 
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Audio]
-        panel.nameFieldStringValue = recording.fileName
-        panel.canCreateDirectories = true
-
-        guard panel.runModal() == .OK, let destinationURL = panel.url else {
+        guard let destinationURL = fileActions.chooseExportDestination(recording.fileName) else {
             return
         }
 
@@ -467,12 +497,10 @@ final class WiretapStore {
             return
         }
 
-        guard let contentView = NSApplication.shared.keyWindow?.contentView else {
+        guard fileActions.share([fileURL]) else {
             notice = WiretapNotice(title: "Share Unavailable", message: "Open the library window and try sharing again.")
             return
         }
-
-        NSSharingServicePicker(items: [fileURL]).show(relativeTo: .zero, of: contentView, preferredEdge: .minY)
     }
 
     func togglePlayback(for recording: Recording) {

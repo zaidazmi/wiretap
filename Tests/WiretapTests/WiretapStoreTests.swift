@@ -561,6 +561,185 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRevealSelectsExistingRecordingFile() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let fileURL = try repository.recordingURL(for: id)
+        try Data("audio".utf8).write(to: fileURL)
+        let recording = makeRecording(id: id, title: "Reveal", fileURL: fileURL)
+        var revealedURL: URL?
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(reveal: { revealedURL = $0 }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.reveal(recording)
+
+        XCTAssertEqual(revealedURL, fileURL)
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
+    func testRevealSelectsRecoveryFolderForInterruptedRecording() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let recoveryURL = try repository.recoveryURL(for: id)
+        try FileManager.default.createDirectory(at: recoveryURL, withIntermediateDirectories: true)
+        try Data("source".utf8).write(to: recoveryURL.appendingPathComponent("source.m4a"))
+        let recording = makeRecording(
+            id: id,
+            title: "Recovery",
+            recoveryFolderURL: recoveryURL,
+            status: .interrupted
+        )
+        var revealedURL: URL?
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(reveal: { revealedURL = $0 }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.reveal(recording)
+
+        XCTAssertEqual(revealedURL, recoveryURL)
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
+    func testRevealReportsMissingFileWhenManagedFileIsGone() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let missingURL = try repository.recordingURL(for: UUID())
+        let recording = makeRecording(title: "Missing", fileURL: missingURL)
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(reveal: { _ in XCTFail("Reveal should not run for missing files") }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.reveal(recording)
+
+        XCTAssertEqual(store.notice?.title, "Missing File")
+    }
+
+    @MainActor
+    func testExportCopiesRecordingToChosenDestination() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let fileURL = try repository.recordingURL(for: id)
+        let sourceData = Data("audio".utf8)
+        try sourceData.write(to: fileURL)
+        let destinationURL = temporaryDirectory.appendingPathComponent("Exported.m4a")
+        let recording = makeRecording(id: id, title: "Export", fileURL: fileURL)
+        var requestedFileName: String?
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(
+                chooseExportDestination: { fileName in
+                    requestedFileName = fileName
+                    return destinationURL
+                }
+            ),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.export(recording)
+
+        XCTAssertEqual(requestedFileName, recording.fileName)
+        XCTAssertEqual(try Data(contentsOf: destinationURL), sourceData)
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
+    func testExportReportsMissingFileBeforeChoosingDestination() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let missingURL = try repository.recordingURL(for: UUID())
+        let recording = makeRecording(title: "Missing Export", fileURL: missingURL)
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(
+                chooseExportDestination: { _ in
+                    XCTFail("Export should not request a destination for missing files")
+                    return nil
+                }
+            ),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.export(recording)
+
+        XCTAssertEqual(store.notice?.title, "Missing File")
+    }
+
+    @MainActor
+    func testSharePresentsExistingRecordingFile() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let fileURL = try repository.recordingURL(for: id)
+        try Data("audio".utf8).write(to: fileURL)
+        let recording = makeRecording(id: id, title: "Share", fileURL: fileURL)
+        var sharedURLs = [URL]()
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(share: { urls in
+                sharedURLs = urls
+                return true
+            }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.share(recording)
+
+        XCTAssertEqual(sharedURLs, [fileURL])
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
+    func testShareReportsUnavailableWhenPresenterCannotOpen() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let fileURL = try repository.recordingURL(for: id)
+        try Data("audio".utf8).write(to: fileURL)
+        let recording = makeRecording(id: id, title: "Share", fileURL: fileURL)
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(share: { _ in false }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.share(recording)
+
+        XCTAssertEqual(store.notice?.title, "Share Unavailable")
+    }
+
+    @MainActor
+    func testShareReportsMissingFileBeforePresentingPicker() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let missingURL = try repository.recordingURL(for: UUID())
+        let recording = makeRecording(title: "Missing Share", fileURL: missingURL)
+        let store = WiretapStore(
+            recordings: [recording],
+            repository: repository,
+            fileActions: makeFileActions(share: { _ in
+                XCTFail("Share should not run for missing files")
+                return true
+            }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.share(recording)
+
+        XCTAssertEqual(store.notice?.title, "Missing File")
+    }
+
+    @MainActor
     func testDeleteSelectedPersistsLibraryAndRemovesFile() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()
@@ -590,6 +769,7 @@ final class WiretapStoreTests: XCTestCase {
         id: UUID = UUID(),
         title: String,
         fileURL: URL? = nil,
+        recoveryFolderURL: URL? = nil,
         fileSizeBytes: Int64 = 0,
         status: Recording.Status = .finalized
     ) -> Recording {
@@ -599,6 +779,7 @@ final class WiretapStoreTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 1_782_900_000),
             duration: 30,
             fileURL: fileURL,
+            recoveryFolderURL: recoveryFolderURL,
             fileSizeBytes: fileSizeBytes,
             sampleRate: 48_000,
             channelCount: 2,
@@ -663,6 +844,19 @@ final class WiretapStoreTests: XCTestCase {
             ]
         )
         try file.write(from: buffer)
+    }
+
+    @MainActor
+    private func makeFileActions(
+        reveal: @escaping (URL) -> Void = { _ in },
+        chooseExportDestination: @escaping (String) -> URL? = { _ in nil },
+        share: @escaping ([URL]) -> Bool = { _ in false }
+    ) -> RecordingFileActions {
+        RecordingFileActions(
+            reveal: reveal,
+            chooseExportDestination: chooseExportDestination,
+            share: share
+        )
     }
 }
 

@@ -85,7 +85,13 @@ Wiretap saves an active recording marker before capture starts. If the app quits
 swift test
 ```
 
-The current suite covers library persistence, metadata migration, missing-file repair, active-recording recovery, search/rename/delete flows, Core Audio permission-error mapping, queued file writes, source alignment, drift correction, duration accuracy, and clipping prevention.
+For an app-bundle launch smoke:
+
+```sh
+Scripts/smoke-app.sh debug
+```
+
+The current suite covers library persistence, metadata migration, missing-file repair, active-recording recovery, search/rename/delete/reveal/export/share flows, Core Audio permission-error mapping, queued file writes, source alignment, drift correction, duration accuracy, and clipping prevention. The smoke script builds `Wiretap.app`, verifies app metadata and signing, launches the menu bar app, and terminates the launched process.
 
 Hardware capture behavior still needs manual verification across speakers, wired headphones, Bluetooth headphones, default input switching, and sleep/wake.
 

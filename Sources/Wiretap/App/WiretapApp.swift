@@ -1,9 +1,17 @@
 import SwiftUI
 
 @main
+@MainActor
 struct WiretapApp: App {
-    @State private var store = WiretapStore.live()
+    @State private var store: WiretapStore
     private let libraryWindowController = LibraryWindowController()
+    private let lifecycleMonitor: RecordingLifecycleMonitor
+
+    init() {
+        let store = WiretapStore.live()
+        self._store = State(initialValue: store)
+        self.lifecycleMonitor = RecordingLifecycleMonitor(store: store)
+    }
 
     var body: some Scene {
         MenuBarExtra {

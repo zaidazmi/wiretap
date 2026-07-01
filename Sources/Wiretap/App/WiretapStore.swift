@@ -2,6 +2,88 @@ import AppKit
 import Foundation
 import Observation
 
+private enum RecordingFinalizationStrategy {
+    case mixSources
+    case retainSources
+}
+
+private enum RecordingStopReason {
+    case userInitiated
+    case interrupted(RecordingInterruptionReason)
+
+    var status: Recording.Status {
+        switch self {
+        case .userInitiated: .finalized
+        case .interrupted: .interrupted
+        }
+    }
+
+    func recordingTitle(createdAt: Date) -> String {
+        let timestamp = createdAt.formatted(date: .abbreviated, time: .shortened)
+
+        switch self {
+        case .userInitiated:
+            return "Recording \(timestamp)"
+        case .interrupted:
+            return "Interrupted Recording \(timestamp)"
+        }
+    }
+
+    func sourceSummary(for sources: [RecordingSource]) -> String {
+        let summary = Recording.sourceSummary(for: sources)
+
+        switch self {
+        case .userInitiated:
+            return summary
+        case .interrupted:
+            return "Interrupted - \(summary)"
+        }
+    }
+
+    func retainedSourceSummary(didRetainSources: Bool) -> String {
+        switch self {
+        case .userInitiated:
+            return didRetainSources
+                ? "Recording sources retained for recovery"
+                : "Recording could not be finalized"
+        case let .interrupted(reason):
+            return didRetainSources
+                ? reason.recoverySummary
+                : "Interrupted - recording could not be finalized"
+        }
+    }
+
+    var completionNotice: WiretapNotice? {
+        switch self {
+        case .userInitiated:
+            return nil
+        case let .interrupted(reason):
+            return WiretapNotice(title: "Recording Interrupted", message: reason.noticeMessage)
+        }
+    }
+
+    func failureNotice(error: Error?, didRetainSources: Bool) -> WiretapNotice {
+        switch self {
+        case .userInitiated:
+            return WiretapNotice(
+                title: "Finalization Failed",
+                message: error?.localizedDescription ?? "Wiretap could not finalize this recording."
+            )
+        case let .interrupted(reason):
+            var message = reason.noticeMessage
+            message += didRetainSources
+                ? " Source files were retained for recovery."
+                : " Wiretap could not retain source files for recovery."
+
+            if let error {
+                message += " Finalization error: \(error.localizedDescription)"
+            }
+
+            return WiretapNotice(title: "Recording Interrupted", message: message)
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class WiretapStore {
@@ -223,71 +305,15 @@ final class WiretapStore {
     }
 
     func stopRecording() {
-        guard isRecording else { return }
+        finishActiveRecording(reason: .userInitiated, finalization: .mixSources)
+    }
 
-        let measuredDuration = microphoneRecorder.stopRecording()
-        systemAudioTap.stop()
-        let duration = max(elapsedSeconds, measuredDuration, 1)
-        let title = "Recording \(Date().formatted(date: .abbreviated, time: .shortened))"
-        let captureSources = activeCaptureSources
-        let sourceStartDates = activeSourceStartDates
+    func interruptRecording(reason: RecordingInterruptionReason) {
+        finishActiveRecording(reason: .interrupted(reason), finalization: .mixSources)
+    }
 
-        guard let id = activeRecordingID,
-              let finalURL = activeFinalURL,
-              let microphoneURL = activeMicrophoneURL,
-              let systemAudioURL = activeSystemAudioURL
-        else {
-            resetRecordingState()
-            return
-        }
-
-        resetRecordingState()
-
-        let referenceStartDate = sourceStartDates.values.min()
-        var inputs = [
-            AudioMixerInput(
-                url: microphoneURL,
-                source: .microphone,
-                startOffset: sourceOffset(for: .microphone, from: sourceStartDates, referenceDate: referenceStartDate),
-                targetDuration: sourceTargetDuration(
-                    for: .microphone,
-                    sessionDuration: duration,
-                    sourceStartDates: sourceStartDates,
-                    referenceDate: referenceStartDate
-                )
-            )
-        ]
-        if captureSources.contains(.systemAudio) {
-            inputs.insert(
-                AudioMixerInput(
-                    url: systemAudioURL,
-                    source: .systemAudio,
-                    startOffset: sourceOffset(
-                        for: .systemAudio,
-                        from: sourceStartDates,
-                        referenceDate: referenceStartDate
-                    ),
-                    targetDuration: sourceTargetDuration(
-                        for: .systemAudio,
-                        sessionDuration: duration,
-                        sourceStartDates: sourceStartDates,
-                        referenceDate: referenceStartDate
-                    )
-                ),
-                at: 0
-            )
-        }
-
-        Task {
-            await finalizeRecording(
-                id: id,
-                title: title,
-                durationFallback: duration,
-                finalURL: finalURL,
-                inputs: inputs,
-                cleanupURLs: [systemAudioURL, microphoneURL]
-            )
-        }
+    func preserveInterruptedRecording(reason: RecordingInterruptionReason) {
+        finishActiveRecording(reason: .interrupted(reason), finalization: .retainSources)
     }
 
     func tick(now: Date = Date()) {
@@ -471,17 +497,77 @@ final class WiretapStore {
         playbackDuration = playbackController.duration
     }
 
+    private func finishActiveRecording(
+        reason: RecordingStopReason,
+        finalization: RecordingFinalizationStrategy
+    ) {
+        guard isRecording else { return }
+
+        let stoppedAt = Date()
+        let measuredDuration = microphoneRecorder.stopRecording()
+        systemAudioTap.stop()
+        let duration = max(elapsedSeconds, measuredDuration, 1)
+        let title = reason.recordingTitle(createdAt: stoppedAt)
+        let captureSources = activeCaptureSources
+        let sourceStartDates = activeSourceStartDates
+
+        guard let id = activeRecordingID,
+              let finalURL = activeFinalURL,
+              let microphoneURL = activeMicrophoneURL,
+              let systemAudioURL = activeSystemAudioURL
+        else {
+            resetRecordingState()
+            return
+        }
+
+        resetRecordingState()
+
+        let cleanupURLs = [systemAudioURL, microphoneURL]
+        switch finalization {
+        case .mixSources:
+            let inputs = mixerInputs(
+                microphoneURL: microphoneURL,
+                systemAudioURL: systemAudioURL,
+                captureSources: captureSources,
+                sourceStartDates: sourceStartDates,
+                duration: duration
+            )
+
+            Task {
+                await finalizeRecording(
+                    id: id,
+                    title: title,
+                    durationFallback: duration,
+                    finalURL: finalURL,
+                    inputs: inputs,
+                    cleanupURLs: cleanupURLs,
+                    reason: reason
+                )
+            }
+
+        case .retainSources:
+            retainInterruptedSources(
+                id: id,
+                title: title,
+                durationFallback: duration,
+                cleanupURLs: cleanupURLs,
+                reason: reason
+            )
+        }
+    }
+
     private func finalizeRecording(
         id: Recording.ID,
         title: String,
         durationFallback: TimeInterval,
         finalURL: URL,
         inputs: [AudioMixerInput],
-        cleanupURLs: [URL]
+        cleanupURLs: [URL],
+        reason: RecordingStopReason
     ) async {
         do {
             let mixResult = try await mixerWriter.mix(inputs: inputs, outputURL: finalURL)
-            let sourceSummary = Recording.sourceSummary(for: mixResult.sources)
+            let sourceSummary = reason.sourceSummary(for: mixResult.sources)
             let recording = Recording(
                 id: id,
                 title: title,
@@ -492,35 +578,53 @@ final class WiretapStore {
                 sampleRate: 48_000,
                 channelCount: 2,
                 sourceSummary: sourceSummary,
-                status: .finalized
+                status: reason.status
             )
 
             recordings.insert(recording, at: 0)
             selectedRecordingID = recording.id
             saveLibrary()
             repository.deleteTemporaryFiles(cleanupURLs)
+            notice = reason.completionNotice
         } catch {
-            let recoveryFolderURL = try? repository.retainTemporaryFiles(cleanupURLs, for: id)
-            let interruptedRecording = Recording(
+            retainInterruptedSources(
                 id: id,
                 title: title,
-                createdAt: Date(),
-                duration: max(durationFallback, 1),
-                fileURL: nil,
-                recoveryFolderURL: recoveryFolderURL,
-                fileSizeBytes: 0,
-                sampleRate: 48_000,
-                channelCount: 2,
-                sourceSummary: recoveryFolderURL == nil
-                    ? "Recording could not be finalized"
-                    : "Recording sources retained for recovery",
-                status: .interrupted
+                durationFallback: durationFallback,
+                cleanupURLs: cleanupURLs,
+                reason: reason,
+                error: error
             )
-            recordings.insert(interruptedRecording, at: 0)
-            selectedRecordingID = interruptedRecording.id
-            saveLibrary()
-            notice = WiretapNotice(title: "Finalization Failed", message: error.localizedDescription)
         }
+    }
+
+    private func retainInterruptedSources(
+        id: Recording.ID,
+        title: String,
+        durationFallback: TimeInterval,
+        cleanupURLs: [URL],
+        reason: RecordingStopReason,
+        error: Error? = nil
+    ) {
+        let recoveryFolderURL = try? repository.retainTemporaryFiles(cleanupURLs, for: id)
+        let didRetainSources = recoveryFolderURL != nil
+        let interruptedRecording = Recording(
+            id: id,
+            title: title,
+            createdAt: Date(),
+            duration: max(durationFallback, 1),
+            fileURL: nil,
+            recoveryFolderURL: recoveryFolderURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: reason.retainedSourceSummary(didRetainSources: didRetainSources),
+            status: .interrupted
+        )
+        recordings.insert(interruptedRecording, at: 0)
+        selectedRecordingID = interruptedRecording.id
+        saveLibrary()
+        notice = reason.failureNotice(error: error, didRetainSources: didRetainSources)
     }
 }
 
@@ -570,6 +674,56 @@ private extension WiretapStore {
         let targetDuration = sessionDuration - offset
 
         return targetDuration > 0 ? targetDuration : nil
+    }
+
+    func mixerInputs(
+        microphoneURL: URL,
+        systemAudioURL: URL,
+        captureSources: Set<RecordingSource>,
+        sourceStartDates: [RecordingSource: Date],
+        duration: TimeInterval
+    ) -> [AudioMixerInput] {
+        let referenceStartDate = sourceStartDates.values.min()
+        var inputs = [
+            AudioMixerInput(
+                url: microphoneURL,
+                source: .microphone,
+                startOffset: sourceOffset(
+                    for: .microphone,
+                    from: sourceStartDates,
+                    referenceDate: referenceStartDate
+                ),
+                targetDuration: sourceTargetDuration(
+                    for: .microphone,
+                    sessionDuration: duration,
+                    sourceStartDates: sourceStartDates,
+                    referenceDate: referenceStartDate
+                )
+            )
+        ]
+
+        if captureSources.contains(.systemAudio) {
+            inputs.insert(
+                AudioMixerInput(
+                    url: systemAudioURL,
+                    source: .systemAudio,
+                    startOffset: sourceOffset(
+                        for: .systemAudio,
+                        from: sourceStartDates,
+                        referenceDate: referenceStartDate
+                    ),
+                    targetDuration: sourceTargetDuration(
+                        for: .systemAudio,
+                        sessionDuration: duration,
+                        sourceStartDates: sourceStartDates,
+                        referenceDate: referenceStartDate
+                    )
+                ),
+                at: 0
+            )
+        }
+
+        return inputs
     }
 
     func microphoneCaptureState(for permissionState: PermissionState) -> CaptureSourceState {

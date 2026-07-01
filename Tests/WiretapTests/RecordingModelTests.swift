@@ -33,6 +33,37 @@ final class RecordingModelTests: XCTestCase {
         XCTAssertTrue(recording.searchableText.localizedStandardContains("System audio"))
     }
 
+    func testSearchableTextIncludesInterruptedStatus() {
+        let recording = Recording(
+            title: "Paused by Sleep",
+            createdAt: .distantPast,
+            duration: 1,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "Interrupted - System audio + default microphone",
+            status: .interrupted
+        )
+
+        XCTAssertTrue(recording.searchableText.localizedStandardContains("Needs Review"))
+        XCTAssertTrue(recording.searchableText.localizedStandardContains("Interrupted"))
+    }
+
+    func testInterruptionReasonsHaveRecoverySummaries() {
+        XCTAssertEqual(
+            RecordingInterruptionReason.appTermination.recoverySummary,
+            "Interrupted - source files retained before quit"
+        )
+        XCTAssertEqual(
+            RecordingInterruptionReason.systemSleep.recoverySummary,
+            "Interrupted - source files retained before sleep"
+        )
+        XCTAssertTrue(
+            RecordingInterruptionReason.sessionInactive.noticeMessage
+                .localizedStandardContains("session changed")
+        )
+    }
+
     func testDecodingOlderMetadataDefaultsRecoveryFolderToNil() throws {
         let json = """
         {

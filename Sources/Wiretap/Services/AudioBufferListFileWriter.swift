@@ -54,10 +54,16 @@ final class AudioBufferListFileWriter {
     }
 
     func write(inputData: UnsafePointer<AudioBufferList>) {
-        guard let pendingBuffer = copiedBuffer(from: inputData) else { return }
-        writeQueue.async { [state, pendingBuffer] in
-            defer { pendingBuffer.recycle() }
-            state.write(pendingBuffer.buffer)
+        switch copiedBuffer(from: inputData) {
+        case let .success(pendingBuffer):
+            writeQueue.async { [state, pendingBuffer] in
+                defer { pendingBuffer.recycle() }
+                state.write(pendingBuffer.buffer)
+            }
+        case let .failure(failure):
+            state.recordDroppedFrames(failure.frameCount, error: failure.error)
+        case nil:
+            return
         }
     }
 
@@ -71,7 +77,7 @@ final class AudioBufferListFileWriter {
         return state.flushResult
     }
 
-    private func copiedBuffer(from inputData: UnsafePointer<AudioBufferList>) -> PendingAudioBuffer? {
+    private func copiedBuffer(from inputData: UnsafePointer<AudioBufferList>) -> PendingAudioBufferResult? {
         guard let firstBuffer = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer(mutating: inputData)
         ).first else { return nil }
@@ -83,11 +89,32 @@ final class AudioBufferListFileWriter {
         let frameLength = AVAudioFrameCount(Int(firstBuffer.mDataByteSize) / bytesPerFrame)
         guard frameLength > 0 else { return nil }
 
-        guard let pendingBuffer = bufferPool.borrow(frameLength: frameLength)
-                ?? PendingAudioBuffer.makeUnpooled(format: inputFormat, frameLength: frameLength)
-        else { return nil }
+        guard frameLength <= bufferPool.frameCapacity else {
+            return .failure(PendingAudioBufferFailure(
+                frameCount: frameLength,
+                error: AudioBufferListFileWriterError.bufferExceedsPoolCapacity(
+                    frameCount: frameLength,
+                    capacity: bufferPool.frameCapacity
+                )
+            ))
+        }
 
-        let copiedBuffer = pendingBuffer.buffer
+        guard let pendingBuffer = bufferPool.borrow(frameLength: frameLength) else {
+            return .failure(PendingAudioBufferFailure(
+                frameCount: frameLength,
+                error: AudioBufferListFileWriterError.bufferPoolExhausted(frameCount: frameLength)
+            ))
+        }
+
+        copy(inputData: inputData, frameLength: frameLength, into: pendingBuffer.buffer)
+        return .success(pendingBuffer)
+    }
+
+    private func copy(
+        inputData: UnsafePointer<AudioBufferList>,
+        frameLength: AVAudioFrameCount,
+        into copiedBuffer: AVAudioPCMBuffer
+    ) {
         copiedBuffer.frameLength = frameLength
         let sourceBuffers = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer(mutating: inputData)
@@ -112,19 +139,42 @@ final class AudioBufferListFileWriter {
             memcpy(destinationData, sourceData, byteCount)
             destinationBuffers[index].mDataByteSize = UInt32(byteCount)
         }
-
-        return pendingBuffer
     }
+}
+
+private enum PendingAudioBufferResult {
+    case success(PendingAudioBuffer)
+    case failure(PendingAudioBufferFailure)
+}
+
+private struct PendingAudioBufferFailure {
+    var frameCount: AVAudioFrameCount
+    var error: Error
 }
 
 struct AudioFileWriterFlushResult {
     var capturedFrameCount: Int64
+    var droppedFrameCount: Int64 = 0
     var writeError: Error?
+}
+
+enum AudioBufferListFileWriterError: LocalizedError {
+    case bufferPoolExhausted(frameCount: AVAudioFrameCount)
+    case bufferExceedsPoolCapacity(frameCount: AVAudioFrameCount, capacity: AVAudioFrameCount)
+
+    var errorDescription: String? {
+        switch self {
+        case let .bufferPoolExhausted(frameCount):
+            "Wiretap dropped \(frameCount) audio frames because the capture buffer pool was exhausted."
+        case let .bufferExceedsPoolCapacity(frameCount, capacity):
+            "Wiretap dropped \(frameCount) audio frames because the capture buffer exceeded the pool capacity of \(capacity) frames."
+        }
+    }
 }
 
 private final class AudioPCMBufferPool: @unchecked Sendable {
     private let format: AVAudioFormat
-    private let frameCapacity: AVAudioFrameCount
+    let frameCapacity: AVAudioFrameCount
     private var lock = os_unfair_lock_s()
     private var buffers: [AVAudioPCMBuffer]
 
@@ -167,6 +217,7 @@ private final class WriteState: @unchecked Sendable {
     private let lock = NSLock()
     private var storedWriteError: Error?
     private var storedCapturedFrameCount: Int64 = 0
+    private var storedDroppedFrameCount: Int64 = 0
 
     init(
         audioFile: AVAudioFile,
@@ -181,6 +232,7 @@ private final class WriteState: @unchecked Sendable {
         defer { lock.unlock() }
         return AudioFileWriterFlushResult(
             capturedFrameCount: storedCapturedFrameCount,
+            droppedFrameCount: storedDroppedFrameCount,
             writeError: storedWriteError
         )
     }
@@ -199,6 +251,16 @@ private final class WriteState: @unchecked Sendable {
         } catch {
             recordWriteError(error)
         }
+    }
+
+    func recordDroppedFrames(_ frameCount: AVAudioFrameCount, error: Error) {
+        lock.lock()
+        storedCapturedFrameCount += Int64(frameCount)
+        storedDroppedFrameCount += Int64(frameCount)
+        if storedWriteError == nil {
+            storedWriteError = error
+        }
+        lock.unlock()
     }
 
     private func recordCapturedFrames(_ frameCount: AVAudioFrameCount) {
@@ -227,13 +289,5 @@ private final class PendingAudioBuffer: @unchecked Sendable {
 
     func recycle() {
         recycleHandler?()
-    }
-
-    static func makeUnpooled(format: AVAudioFormat, frameLength: AVAudioFrameCount) -> PendingAudioBuffer? {
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else {
-            return nil
-        }
-
-        return PendingAudioBuffer(buffer: buffer)
     }
 }

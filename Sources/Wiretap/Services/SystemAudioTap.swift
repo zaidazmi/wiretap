@@ -114,6 +114,7 @@ final class SystemAudioTap: SystemAudioTapping {
         writer = nil
         return CaptureStopResult(
             capturedFrameCount: flushResult?.capturedFrameCount ?? 0,
+            droppedFrameCount: flushResult?.droppedFrameCount ?? 0,
             writeError: flushResult?.writeError
         )
     }

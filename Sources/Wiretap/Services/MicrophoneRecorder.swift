@@ -82,6 +82,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
         return CaptureStopResult(
             duration: duration,
             capturedFrameCount: flushResult?.capturedFrameCount ?? 0,
+            droppedFrameCount: flushResult?.droppedFrameCount ?? 0,
             writeError: flushResult?.writeError
         )
     }

@@ -15,6 +15,7 @@ struct RecordingControlsView: View {
             .controlSize(.large)
             .tint(.red)
             .disabled(store.isRecording || !store.canRecord)
+            .accessibilityIdentifier(WiretapAccessibility.MenuBar.recordButton)
 
             Button {
                 store.stopRecording()
@@ -25,6 +26,7 @@ struct RecordingControlsView: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .disabled(!store.isRecording)
+            .accessibilityIdentifier(WiretapAccessibility.MenuBar.stopButton)
         }
     }
 }

@@ -21,6 +21,7 @@ struct EmptyLibraryView: View {
                         Label("Clear Search", systemImage: "xmark.circle")
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier(WiretapAccessibility.Library.emptyClearSearchButton)
                 } else {
                     Button(action: onRecord) {
                         Label("Record", systemImage: "record.circle.fill")
@@ -28,15 +29,18 @@ struct EmptyLibraryView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
                     .disabled(!canRecord)
+                    .accessibilityIdentifier(WiretapAccessibility.Library.emptyRecordButton)
 
                     Button(action: onReviewPermissions) {
                         Label("Permissions", systemImage: "lock.shield")
                     }
                     .buttonStyle(.bordered)
+                    .accessibilityIdentifier(WiretapAccessibility.Library.emptyPermissionsButton)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier(WiretapAccessibility.Library.emptyState)
     }
 
     private var title: String {

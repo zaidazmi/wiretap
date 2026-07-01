@@ -26,6 +26,7 @@ struct LibraryView: View {
                 }
             }
         }
+        .accessibilityIdentifier(WiretapAccessibility.Library.window)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -34,6 +35,7 @@ struct LibraryView: View {
                     Label("Permissions", systemImage: "lock.shield")
                 }
                 .help("Review capture permissions")
+                .accessibilityIdentifier(WiretapAccessibility.Library.toolbarPermissionsButton)
 
                 RecordingControlView(store: store, style: .toolbar)
             }
@@ -69,6 +71,7 @@ private struct LibraryStatusStrip: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(.bar)
+        .accessibilityIdentifier(WiretapAccessibility.Library.statusStrip)
     }
 }
 
@@ -112,9 +115,11 @@ private struct RecordingSidebar: View {
                 }
                 .listStyle(.sidebar)
                 .environment(\.defaultMinListRowHeight, 70)
+                .accessibilityIdentifier(WiretapAccessibility.Library.recordingList)
             }
         }
         .searchable(text: $store.searchText, prompt: "Search recordings")
+        .accessibilityIdentifier(WiretapAccessibility.Library.sidebar)
     }
 }
 

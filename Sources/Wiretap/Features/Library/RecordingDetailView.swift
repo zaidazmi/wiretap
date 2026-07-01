@@ -31,6 +31,7 @@ struct RecordingDetailView: View {
             )
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .accessibilityIdentifier(WiretapAccessibility.Detail.root)
         .confirmationDialog(
             "Delete Recording?",
             isPresented: $isConfirmingDelete,
@@ -39,7 +40,9 @@ struct RecordingDetailView: View {
             Button("Delete", role: .destructive) {
                 store.delete(recording)
             }
+            .accessibilityIdentifier(WiretapAccessibility.Detail.deleteConfirmButton)
             Button("Cancel", role: .cancel) {}
+                .accessibilityIdentifier(WiretapAccessibility.Detail.deleteCancelButton)
         } message: {
             Text("This removes the library item and its local audio file.")
         }
@@ -59,6 +62,7 @@ struct RecordingDetailView: View {
                     .textFieldStyle(.plain)
                     .font(.largeTitle.weight(.semibold))
                     .disabled(recording.status == .recording)
+                    .accessibilityIdentifier(WiretapAccessibility.Detail.titleField)
 
                     HStack(spacing: 12) {
                         StatusCapsule(status: recording.status)
@@ -175,6 +179,7 @@ private struct PlayerSurface: View {
                 .clipShape(Circle())
                 .disabled(!isPlayable)
                 .help(isCurrentRecording && store.isPlaying ? "Pause" : "Play")
+                .accessibilityIdentifier(WiretapAccessibility.Detail.playPauseButton)
 
                 VStack(spacing: 8) {
                     Slider(
@@ -186,6 +191,7 @@ private struct PlayerSurface: View {
                     )
                     .accessibilityLabel("Playback position")
                     .disabled(!isPlayable)
+                    .accessibilityIdentifier(WiretapAccessibility.Detail.seekSlider)
 
                     HStack {
                         Text(progressText)
@@ -202,10 +208,12 @@ private struct PlayerSurface: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier(WiretapAccessibility.Detail.playbackUnavailableMessage)
             }
         }
         .padding(18)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityIdentifier(WiretapAccessibility.Detail.player)
     }
 }
 
@@ -256,16 +264,19 @@ private struct InterruptedRecordingPanel: View {
                             Label("Reveal Recovery Folder", systemImage: "folder")
                         }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier(WiretapAccessibility.Detail.recoveryRevealButton)
 
                         Button(action: onRecord) {
                             Label("Record Again", systemImage: "record.circle")
                         }
                         .buttonStyle(.bordered)
                         .disabled(!canRecord)
+                        .accessibilityIdentifier(WiretapAccessibility.Detail.recoveryRecordAgainButton)
                     }
                 }
             }
         }
+        .accessibilityIdentifier(WiretapAccessibility.Detail.recoveryPanel)
     }
 }
 
@@ -342,22 +353,26 @@ private struct RecordingActionBar: View {
                 Label("Reveal", systemImage: "folder")
             }
             .disabled(!canReveal)
+            .accessibilityIdentifier(WiretapAccessibility.Detail.revealButton)
 
             Button(action: onExport) {
                 Label("Export", systemImage: "square.and.arrow.down")
             }
             .disabled(!canExport)
+            .accessibilityIdentifier(WiretapAccessibility.Detail.exportButton)
 
             Button(action: onShare) {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
             .disabled(!canExport)
+            .accessibilityIdentifier(WiretapAccessibility.Detail.shareButton)
 
             Spacer()
 
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
+            .accessibilityIdentifier(WiretapAccessibility.Detail.deleteButton)
         }
         .buttonStyle(.bordered)
         .padding(14)

@@ -44,6 +44,7 @@ struct MenuBarView: View {
                     Label("Permissions", systemImage: "lock.shield")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .accessibilityIdentifier(WiretapAccessibility.MenuBar.permissionsButton)
 
                 Button {
                     showLibrary()
@@ -51,6 +52,7 @@ struct MenuBarView: View {
                     Label("Open Library", systemImage: "rectangle.stack")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .accessibilityIdentifier(WiretapAccessibility.MenuBar.openLibraryButton)
 
                 Button(role: .destructive) {
                     NSApplication.shared.terminate(nil)
@@ -58,11 +60,13 @@ struct MenuBarView: View {
                     Label("Quit Wiretap", systemImage: "power")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .accessibilityIdentifier(WiretapAccessibility.MenuBar.quitButton)
             }
             .buttonStyle(.plain)
             .padding(16)
         }
         .frame(width: 360)
+        .accessibilityIdentifier(WiretapAccessibility.MenuBar.panel)
     }
 
     private func showLibrary() {
@@ -98,6 +102,7 @@ private struct MenuHeader: View {
                     Capsule()
                         .fill(store.isRecording ? Color.red.opacity(0.12) : Color.secondary.opacity(0.12))
                 )
+                .accessibilityIdentifier(WiretapAccessibility.MenuBar.status)
         }
         .padding(16)
     }
@@ -115,10 +120,19 @@ private struct MenuRecordingPanel: View {
                 .font(.system(size: 38, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .contentTransition(.numericText())
+                .accessibilityIdentifier(WiretapAccessibility.MenuBar.elapsed)
 
             HStack(spacing: 10) {
-                MenuMetric(title: "Recordings", value: "\(store.recordings.count)")
-                MenuMetric(title: "Library", value: store.totalFileSizeText)
+                MenuMetric(
+                    title: "Recordings",
+                    value: "\(store.recordings.count)",
+                    identifier: WiretapAccessibility.MenuBar.recordingCount
+                )
+                MenuMetric(
+                    title: "Library",
+                    value: store.totalFileSizeText,
+                    identifier: WiretapAccessibility.MenuBar.librarySize
+                )
             }
         }
         .padding(14)
@@ -129,6 +143,7 @@ private struct MenuRecordingPanel: View {
 private struct MenuMetric: View {
     let title: String
     let value: String
+    let identifier: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -141,6 +156,7 @@ private struct MenuMetric: View {
                 .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -173,6 +189,7 @@ private struct MenuNoticeBanner: View {
                 }
                 .buttonStyle(.plain)
                 .help("Dismiss")
+                .accessibilityIdentifier(WiretapAccessibility.MenuBar.noticeDismissButton)
             }
 
             if let recovery = notice.recovery {
@@ -183,10 +200,12 @@ private struct MenuNoticeBanner: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .accessibilityIdentifier(WiretapAccessibility.MenuBar.noticeRecoveryButton)
             }
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityIdentifier(WiretapAccessibility.MenuBar.noticeBanner)
     }
 }
 
@@ -204,12 +223,14 @@ private struct MenuCaptureSources: View {
             SourceRow(
                 title: "System audio",
                 systemImage: "speaker.wave.2.fill",
-                state: systemAudioState
+                state: systemAudioState,
+                identifier: WiretapAccessibility.MenuBar.systemAudioSource
             )
             SourceRow(
                 title: "Default microphone",
                 systemImage: "mic.fill",
-                state: microphoneState
+                state: microphoneState,
+                identifier: WiretapAccessibility.MenuBar.microphoneSource
             )
 
             HStack {
@@ -228,6 +249,7 @@ private struct SourceRow: View {
     let title: String
     let systemImage: String
     let state: CaptureSourceState
+    let identifier: String
 
     var body: some View {
         HStack(spacing: 10) {
@@ -241,6 +263,7 @@ private struct SourceRow: View {
                 .foregroundStyle(stateColor)
                 .help(state.label)
         }
+        .accessibilityIdentifier(identifier)
     }
 
     private var stateIcon: String {

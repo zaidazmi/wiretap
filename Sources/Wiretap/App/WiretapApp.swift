@@ -35,11 +35,13 @@ struct WiretapApp: App {
                     store.toggleRecording()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+                .accessibilityIdentifier(WiretapAccessibility.Command.recordToggle)
 
                 Button("Open Library") {
                     openWindow(id: WiretapWindow.library)
                 }
                 .keyboardShortcut("l", modifiers: [.command])
+                .accessibilityIdentifier(WiretapAccessibility.Command.openLibrary)
             }
         }
     }
@@ -53,6 +55,7 @@ private struct MenuBarLabelView: View {
     var body: some View {
         Image(systemName: store.isRecording ? "record.circle.fill" : "waveform.circle")
             .symbolRenderingMode(store.isRecording ? .multicolor : .hierarchical)
+            .accessibilityIdentifier(WiretapAccessibility.MenuBar.statusItem)
             .task {
                 openInitialPermissionsIfNeeded()
             }

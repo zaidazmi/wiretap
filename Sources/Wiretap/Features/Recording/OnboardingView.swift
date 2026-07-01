@@ -24,19 +24,25 @@ struct OnboardingView: View {
                     title: "System Audio",
                     summary: "Captures the audio playing on this Mac, including headphone playback.",
                     systemImage: "speaker.wave.3.fill",
-                    state: store.systemAudioState
+                    state: store.systemAudioState,
+                    rowIdentifier: WiretapAccessibility.Onboarding.systemAudioRow,
+                    statusIdentifier: WiretapAccessibility.Onboarding.systemAudioStatus
                 )
                 PermissionRow(
                     title: "Microphone",
                     summary: "Uses the current macOS default input device.",
                     systemImage: "mic.fill",
-                    state: store.microphoneState
+                    state: store.microphoneState,
+                    rowIdentifier: WiretapAccessibility.Onboarding.microphoneRow,
+                    statusIdentifier: WiretapAccessibility.Onboarding.microphoneStatus
                 )
                 PermissionRow(
                     title: "Local Files",
                     summary: "Saves mixed AAC .m4a recordings in the app library.",
                     systemImage: "externaldrive.fill",
-                    state: .ready
+                    state: .ready,
+                    rowIdentifier: WiretapAccessibility.Onboarding.localFilesRow,
+                    statusIdentifier: WiretapAccessibility.Onboarding.localFilesStatus
                 )
             }
 
@@ -55,10 +61,12 @@ struct OnboardingView: View {
                 Button("Not Now") {
                     dismiss()
                 }
+                .accessibilityIdentifier(WiretapAccessibility.Onboarding.notNowButton)
 
                 Button("Refresh") {
                     store.refreshPermissions()
                 }
+                .accessibilityIdentifier(WiretapAccessibility.Onboarding.refreshButton)
 
                 Button("Continue") {
                     Task {
@@ -67,6 +75,7 @@ struct OnboardingView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier(WiretapAccessibility.Onboarding.continueButton)
 
                 if store.permissionState == .denied || store.systemAudioState == .unavailable {
                     Button("Open Settings") {
@@ -77,11 +86,13 @@ struct OnboardingView: View {
                         }
                         dismiss()
                     }
+                    .accessibilityIdentifier(WiretapAccessibility.Onboarding.openSettingsButton)
                 }
             }
         }
         .padding(28)
         .frame(width: 560)
+        .accessibilityIdentifier(WiretapAccessibility.Onboarding.root)
     }
 }
 
@@ -90,6 +101,8 @@ private struct PermissionRow: View {
     let summary: String
     let systemImage: String
     let state: CaptureSourceState
+    let rowIdentifier: String
+    let statusIdentifier: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -106,6 +119,7 @@ private struct PermissionRow: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(stateColor)
                         .help(state.label)
+                        .accessibilityIdentifier(statusIdentifier)
                 }
                 Text(summary)
                     .foregroundStyle(.secondary)
@@ -113,6 +127,7 @@ private struct PermissionRow: View {
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityIdentifier(rowIdentifier)
     }
 
     private var stateIcon: String {

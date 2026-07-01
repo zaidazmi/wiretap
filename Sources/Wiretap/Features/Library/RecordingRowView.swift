@@ -38,6 +38,7 @@ struct RecordingRowView: View {
             }
         }
         .padding(.vertical, 8)
+        .accessibilityIdentifier(WiretapAccessibility.Library.recordingRow(id: recording.id))
     }
 
     private var statusIcon: String {

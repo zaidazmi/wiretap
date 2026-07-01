@@ -29,6 +29,7 @@ struct RecordingControlView: View {
         .tint(store.isRecording ? .red : .accentColor)
         .disabled(!store.canRecord)
         .help(buttonTitle)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var buttonTitle: String {
@@ -37,6 +38,15 @@ struct RecordingControlView: View {
         }
 
         return "Record"
+    }
+
+    private var accessibilityIdentifier: String {
+        switch style {
+        case .toolbar:
+            WiretapAccessibility.Library.toolbarRecordButton
+        case .menuBar:
+            WiretapAccessibility.MenuBar.recordButton
+        }
     }
 }
 

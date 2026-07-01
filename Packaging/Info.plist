@@ -10,6 +10,8 @@
     <string>Wiretap</string>
     <key>CFBundleIdentifier</key>
     <string>dev.zaidazmi.Wiretap</string>
+    <key>CFBundleIconFile</key>
+    <string>Wiretap</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

@@ -63,6 +63,7 @@ Required repository secrets:
 - Checks available disk space before starting a recording.
 - Stores finished recordings under `Application Support/<bundle-id>/Recordings`.
 - Stores interrupted source files under `Application Support/<bundle-id>/Recovery` when needed.
+- Generates the packaged app icon during `Scripts/build-app.sh` so release artifacts do not rely on checked-in binary image assets.
 
 ## Recovery
 

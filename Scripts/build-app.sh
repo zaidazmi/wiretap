@@ -16,6 +16,7 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$BUILD_DIR/Wiretap" "$APP_DIR/Contents/MacOS/Wiretap"
 cp "$REPO_ROOT/Packaging/Info.plist" "$APP_DIR/Contents/Info.plist"
+swift "$REPO_ROOT/Scripts/generate-icon.swift" "$APP_DIR/Contents/Resources/Wiretap.icns"
 
 if [[ -d "$BUILD_DIR/Wiretap_Wiretap.bundle" ]]; then
     cp -R "$BUILD_DIR/Wiretap_Wiretap.bundle" "$APP_DIR/Contents/Resources/"

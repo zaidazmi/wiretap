@@ -576,6 +576,11 @@ final class WiretapStore {
         let captureSources = activeCaptureSources
         let sourceStartDates = activeSourceStartDates
         let captureWriteError = microphoneResult.writeError ?? systemAudioResult.writeError
+        let missingCaptureSource = missingCaptureSource(
+            captureSources: captureSources,
+            microphoneResult: microphoneResult,
+            systemAudioResult: systemAudioResult
+        )
 
         guard let id = activeRecordingID,
               let finalURL = activeFinalURL,
@@ -591,6 +596,18 @@ final class WiretapStore {
         let cleanupURLs = [systemAudioURL, microphoneURL]
         switch finalization {
         case .mixSources:
+            if let missingCaptureSource {
+                retainInterruptedSources(
+                    id: id,
+                    title: title,
+                    durationFallback: duration,
+                    cleanupURLs: cleanupURLs,
+                    reason: reason,
+                    error: CaptureSourceFailure.noCapturedFrames(source: missingCaptureSource)
+                )
+                return
+            }
+
             if let captureWriteError {
                 retainInterruptedSources(
                     id: id,
@@ -632,6 +649,22 @@ final class WiretapStore {
                 reason: reason
             )
         }
+    }
+
+    private func missingCaptureSource(
+        captureSources: Set<RecordingSource>,
+        microphoneResult: CaptureStopResult,
+        systemAudioResult: CaptureStopResult
+    ) -> RecordingSource? {
+        if captureSources.contains(.systemAudio), !systemAudioResult.didCaptureFrames {
+            return .systemAudio
+        }
+
+        if captureSources.contains(.microphone), !microphoneResult.didCaptureFrames {
+            return .microphone
+        }
+
+        return nil
     }
 
     private func finalizeRecording(
@@ -721,6 +754,17 @@ enum WiretapNoticeRecovery: Equatable {
         switch self {
         case .microphoneSettings: "Open Microphone Settings"
         case .systemAudioSettings: "Open Privacy Settings"
+        }
+    }
+}
+
+private enum CaptureSourceFailure: LocalizedError {
+    case noCapturedFrames(source: RecordingSource)
+
+    var errorDescription: String? {
+        switch self {
+        case let .noCapturedFrames(source):
+            "Wiretap did not receive any audio buffers from \(source.label)."
         }
     }
 }

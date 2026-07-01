@@ -102,12 +102,15 @@ final class SystemAudioTap: SystemAudioTapping {
             try? system.destroyProcessTap(tap)
         }
 
-        let writeError = writer?.flush()
+        let flushResult = writer?.flush()
         ioProcID = nil
         aggregateDevice = nil
         tap = nil
         writer = nil
-        return CaptureStopResult(writeError: writeError)
+        return CaptureStopResult(
+            capturedFrameCount: flushResult?.capturedFrameCount ?? 0,
+            writeError: flushResult?.writeError
+        )
     }
 
     private func currentProcessExclusionList() throws -> [AudioObjectID] {

@@ -128,7 +128,33 @@ final class AudioBufferListFileWriterTests: XCTestCase {
 
         writer.write(inputData: buffer.audioBufferList)
 
-        XCTAssertNotNil(writer.flush())
+        let result = writer.flush()
+
+        XCTAssertNotNil(result.writeError)
+        XCTAssertGreaterThan(result.capturedFrameCount, 0)
+    }
+
+    func testFlushReportsCapturedFrameCount() throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("frame-count.m4a")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.02)
+        let writer = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        writer.write(inputData: buffer.audioBufferList)
+        writer.write(inputData: buffer.audioBufferList)
+
+        let result = writer.flush()
+
+        XCTAssertNil(result.writeError)
+        XCTAssertEqual(result.capturedFrameCount, Int64(buffer.frameLength * 2))
     }
 
     private func makeToneBuffer(

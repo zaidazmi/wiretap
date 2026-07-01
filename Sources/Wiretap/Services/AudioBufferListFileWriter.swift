@@ -58,13 +58,13 @@ final class AudioBufferListFileWriter {
     }
 
     @discardableResult
-    func flush() -> Error? {
+    func flush() -> AudioFileWriterFlushResult {
         guard DispatchQueue.getSpecific(key: writeQueueKey) != true else {
-            return state.writeError
+            return state.flushResult
         }
 
         writeQueue.sync {}
-        return state.writeError
+        return state.flushResult
     }
 
     private func copiedBuffer(from inputData: UnsafePointer<AudioBufferList>) -> PendingAudioBuffer? {
@@ -113,6 +113,11 @@ final class AudioBufferListFileWriter {
     }
 }
 
+struct AudioFileWriterFlushResult {
+    var capturedFrameCount: Int64
+    var writeError: Error?
+}
+
 private final class AudioPCMBufferPool: @unchecked Sendable {
     private let format: AVAudioFormat
     private let frameCapacity: AVAudioFrameCount
@@ -157,6 +162,7 @@ private final class WriteState: @unchecked Sendable {
     private let writeBuffer: (AVAudioFile, AVAudioPCMBuffer) throws -> Void
     private let lock = NSLock()
     private var storedWriteError: Error?
+    private var storedCapturedFrameCount: Int64 = 0
 
     init(
         audioFile: AVAudioFile,
@@ -166,18 +172,29 @@ private final class WriteState: @unchecked Sendable {
         self.writeBuffer = writeBuffer
     }
 
-    var writeError: Error? {
+    var flushResult: AudioFileWriterFlushResult {
         lock.lock()
         defer { lock.unlock() }
-        return storedWriteError
+        return AudioFileWriterFlushResult(
+            capturedFrameCount: storedCapturedFrameCount,
+            writeError: storedWriteError
+        )
     }
 
     func write(_ buffer: AVAudioPCMBuffer) {
+        recordCapturedFrames(buffer.frameLength)
+
         do {
             try writeBuffer(audioFile, buffer)
         } catch {
             recordWriteError(error)
         }
+    }
+
+    private func recordCapturedFrames(_ frameCount: AVAudioFrameCount) {
+        lock.lock()
+        storedCapturedFrameCount += Int64(frameCount)
+        lock.unlock()
     }
 
     private func recordWriteError(_ error: Error) {

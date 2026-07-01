@@ -69,12 +69,16 @@ final class MicrophoneRecorder: MicrophoneRecording {
         }
 
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
-        let writeError = writer?.flush()
+        let flushResult = writer?.flush()
         device = nil
         ioProcID = nil
         writer = nil
         startedAt = nil
-        return CaptureStopResult(duration: duration, writeError: writeError)
+        return CaptureStopResult(
+            duration: duration,
+            capturedFrameCount: flushResult?.capturedFrameCount ?? 0,
+            writeError: flushResult?.writeError
+        )
     }
 
     private func inputFormat(for device: AudioHardwareDevice) throws -> AVAudioFormat {

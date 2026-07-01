@@ -84,6 +84,32 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadLibraryPresentsOnboardingWhenPermissionsAreNotReviewed() {
+        let store = WiretapStore(
+            permissionManager: PermissionManager(currentState: { .notReviewed }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.loadLibrary()
+
+        XCTAssertEqual(store.permissionState, .notReviewed)
+        XCTAssertTrue(store.isOnboardingPresented)
+    }
+
+    @MainActor
+    func testLoadLibraryDoesNotPresentOnboardingWhenPermissionsAreReady() {
+        let store = WiretapStore(
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.loadLibrary()
+
+        XCTAssertEqual(store.permissionState, .ready)
+        XCTAssertFalse(store.isOnboardingPresented)
+    }
+
+    @MainActor
     func testSelectedRecordingFollowsSearchFilter() {
         let designRecording = makeRecording(title: "Design Review")
         let interviewRecording = makeRecording(title: "Customer Interview")

@@ -2,8 +2,34 @@ import AppKit
 import AVFoundation
 import Foundation
 
-struct PermissionManager {
+struct PermissionManager: Sendable {
+    private var currentStateProvider: @Sendable () -> PermissionState
+    private var microphoneAccessRequester: @Sendable () async -> PermissionState
+    private var privacySettingsOpener: @Sendable (PrivacySettingsTarget) -> Void
+
+    init(
+        currentState: @escaping @Sendable () -> PermissionState = PermissionManager.defaultCurrentState,
+        requestMicrophoneAccess: @escaping @Sendable () async -> PermissionState = PermissionManager.defaultRequestMicrophoneAccess,
+        openPrivacySettings: @escaping @Sendable (PrivacySettingsTarget) -> Void = PermissionManager.defaultOpenPrivacySettings
+    ) {
+        self.currentStateProvider = currentState
+        self.microphoneAccessRequester = requestMicrophoneAccess
+        self.privacySettingsOpener = openPrivacySettings
+    }
+
     func currentState() -> PermissionState {
+        currentStateProvider()
+    }
+
+    func requestMicrophoneAccess() async -> PermissionState {
+        await microphoneAccessRequester()
+    }
+
+    func openPrivacySettings(_ target: PrivacySettingsTarget = .microphone) {
+        privacySettingsOpener(target)
+    }
+
+    private static func defaultCurrentState() -> PermissionState {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             return .ready
@@ -16,7 +42,7 @@ struct PermissionManager {
         }
     }
 
-    func requestMicrophoneAccess() async -> PermissionState {
+    private static func defaultRequestMicrophoneAccess() async -> PermissionState {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         switch status {
         case .authorized:
@@ -31,7 +57,7 @@ struct PermissionManager {
         }
     }
 
-    func openPrivacySettings(_ target: PrivacySettingsTarget = .microphone) {
+    private static func defaultOpenPrivacySettings(_ target: PrivacySettingsTarget = .microphone) {
         for urlString in target.urlStrings {
             guard let url = URL(string: urlString) else { continue }
             NSWorkspace.shared.open(url)

@@ -218,6 +218,7 @@ final class WiretapStore {
     func loadLibrary() {
         permissionState = permissionManager.currentState()
         microphoneState = microphoneCaptureState(for: permissionState)
+        isOnboardingPresented = permissionState == .notReviewed
 
         do {
             let loadedRecordings = try repository.loadRecordings()

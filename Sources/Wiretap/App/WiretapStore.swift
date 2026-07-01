@@ -254,6 +254,7 @@ final class WiretapStore {
         }
 
         var cleanupURLs = [URL]()
+        var pendingRecordingID: Recording.ID?
 
         do {
             try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
@@ -265,6 +266,23 @@ final class WiretapStore {
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
             var captureSources = Set<RecordingSource>()
             cleanupURLs = [microphoneURL, systemAudioURL]
+            pendingRecordingID = id
+            upsertRecording(
+                Recording(
+                    id: id,
+                    title: "Recording \(startedAt.formatted(date: .abbreviated, time: .shortened))",
+                    createdAt: startedAt,
+                    duration: 0,
+                    fileURL: finalURL,
+                    fileSizeBytes: 0,
+                    sampleRate: 48_000,
+                    channelCount: 2,
+                    sourceSummary: "Recorded audio",
+                    status: .recording
+                )
+            )
+            selectedRecordingID = id
+            try persistLibrary()
 
             do {
                 try systemAudioTap.start(writingTo: systemAudioURL)
@@ -316,6 +334,11 @@ final class WiretapStore {
             systemAudioTap.stop()
             microphoneState = .unavailable
             repository.deleteTemporaryFiles(cleanupURLs)
+            if let pendingRecordingID {
+                recordings.removeAll { $0.id == pendingRecordingID }
+                selectedRecordingID = recordings.first?.id
+                try? persistLibrary()
+            }
             resetRecordingState()
             notice = WiretapNotice(title: "Recording Error", message: error.localizedDescription)
         }
@@ -489,10 +512,14 @@ final class WiretapStore {
 
     private func saveLibrary() {
         do {
-            try repository.saveRecordings(recordings)
+            try persistLibrary()
         } catch {
             notice = WiretapNotice(title: "Library Save Failed", message: error.localizedDescription)
         }
+    }
+
+    private func persistLibrary() throws {
+        try repository.saveRecordings(recordings)
     }
 
     private func resetRecordingState() {

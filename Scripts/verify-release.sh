@@ -94,9 +94,9 @@ fi
 if [[ "$LAUNCH_APP" == "1" ]]; then
     INSTALL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wiretap-install.XXXXXX")"
     cp -R "$MOUNTED_APP" "$INSTALL_DIR/Wiretap.app"
-    open -gj "$INSTALL_DIR/Wiretap.app"
-    sleep 2
-    osascript -e 'tell application id "dev.zaidazmi.Wiretap" to quit' >/dev/null 2>&1 || true
+    WIRETAP_SMOKE_SKIP_BUILD=1 \
+    WIRETAP_SMOKE_APP_DIR="$INSTALL_DIR/Wiretap.app" \
+        "$REPO_ROOT/Scripts/smoke-app.sh" "$CONFIGURATION"
 fi
 
 echo "Verified Wiretap $VERSION release artifact at $DMG_PATH"

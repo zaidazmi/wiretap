@@ -3,22 +3,29 @@ set -euo pipefail
 
 CONFIGURATION="${1:-debug}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_DIR="$REPO_ROOT/.build/Wiretap.app"
+APP_DIR="${WIRETAP_SMOKE_APP_DIR:-$REPO_ROOT/.build/Wiretap.app}"
 EXECUTABLE_PATH="$APP_DIR/Contents/MacOS/Wiretap"
 SKIP_BUILD="${WIRETAP_SMOKE_SKIP_BUILD:-0}"
+DWELL_SECONDS="${WIRETAP_SMOKE_DWELL_SECONDS:-2}"
 LAUNCHED_PID=""
+
+process_matches_app() {
+    local pid="$1"
+    local command
+
+    command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    [[ "$command" == "$EXECUTABLE_PATH"* ]]
+}
 
 find_wiretap_pids() {
     local pids
     local pid
-    local command
 
     pids="$(pgrep -x Wiretap 2>/dev/null || true)"
     while read -r pid; do
         [[ -n "$pid" ]] || continue
 
-        command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-        if [[ "$command" == "$EXECUTABLE_PATH"* ]]; then
+        if process_matches_app "$pid"; then
             echo "$pid"
         fi
     done <<< "$pids"
@@ -49,6 +56,9 @@ cd "$REPO_ROOT"
 if [[ "$SKIP_BUILD" != "1" ]]; then
     "$REPO_ROOT/Scripts/build-app.sh" "$CONFIGURATION"
 fi
+
+APP_DIR="$(cd "$(dirname "$APP_DIR")" && pwd -P)/$(basename "$APP_DIR")"
+EXECUTABLE_PATH="$APP_DIR/Contents/MacOS/Wiretap"
 
 if [[ ! -d "$APP_DIR" ]]; then
     echo "Missing app bundle at $APP_DIR"
@@ -92,8 +102,15 @@ if [[ -z "$LAUNCHED_PID" ]]; then
     exit 1
 fi
 
-if ! kill -0 "$LAUNCHED_PID" >/dev/null 2>&1; then
+if ! process_matches_app "$LAUNCHED_PID"; then
     echo "Wiretap process $LAUNCHED_PID exited before smoke verification"
+    exit 1
+fi
+
+sleep "$DWELL_SECONDS"
+
+if ! process_matches_app "$LAUNCHED_PID"; then
+    echo "Wiretap process $LAUNCHED_PID did not survive launch smoke dwell"
     exit 1
 fi
 

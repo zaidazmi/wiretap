@@ -42,8 +42,17 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertGreaterThan(result.duration, 0.30)
         XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
 
-        let assetDuration = try await AVURLAsset(url: outputURL).load(.duration).seconds
+        let asset = AVURLAsset(url: outputURL)
+        let assetDuration = try await asset.load(.duration).seconds
         XCTAssertGreaterThan(assetDuration, 0.30)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(tracks.count, 1)
+        let formatDescriptions = try await tracks[0].load(.formatDescriptions)
+        let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(
+            formatDescriptions[0]
+        )!.pointee
+        XCTAssertEqual(streamDescription.mSampleRate, 48_000, accuracy: 1)
+        XCTAssertEqual(streamDescription.mChannelsPerFrame, 2)
     }
 
     func testMixIgnoresInputWithoutAudioTrack() async throws {

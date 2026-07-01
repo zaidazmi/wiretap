@@ -66,4 +66,17 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         try repository.deleteFileIfPresent(for: recording)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
     }
+
+    func testDiskSpacePreflightThrowsWhenRequirementIsTooLarge() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+
+        XCTAssertThrowsError(
+            try repository.ensureSufficientDiskSpace(minimumBytes: Int64.max)
+        ) { error in
+            guard case RecordingLibraryError.insufficientDiskSpace = error else {
+                XCTFail("Expected insufficient disk space error, got \(error)")
+                return
+            }
+        }
+    }
 }

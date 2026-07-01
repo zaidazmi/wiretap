@@ -31,6 +31,19 @@ struct RecordingLibraryRepository {
         )
     }
 
+    func availableCapacityForRecordings() throws -> Int64 {
+        try prepare()
+        let values = try recordingsDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values.volumeAvailableCapacityForImportantUsage ?? 0
+    }
+
+    func ensureSufficientDiskSpace(minimumBytes: Int64) throws {
+        let availableBytes = try availableCapacityForRecordings()
+        guard availableBytes >= minimumBytes else {
+            throw RecordingLibraryError.insufficientDiskSpace(available: availableBytes, required: minimumBytes)
+        }
+    }
+
     func loadRecordings() throws -> [Recording] {
         try prepare()
 
@@ -100,11 +113,16 @@ struct RecordingLibraryRepository {
 
 enum RecordingLibraryError: LocalizedError {
     case missingFile
+    case insufficientDiskSpace(available: Int64, required: Int64)
 
     var errorDescription: String? {
         switch self {
         case .missingFile:
-            "The audio file for this recording could not be found."
+            return "The audio file for this recording could not be found."
+        case let .insufficientDiskSpace(available, required):
+            let availableText = ByteCountFormatter.string(fromByteCount: available, countStyle: .file)
+            let requiredText = ByteCountFormatter.string(fromByteCount: required, countStyle: .file)
+            return "Wiretap needs at least \(requiredText) free for a safe recording session. Available: \(availableText)."
         }
     }
 }

@@ -25,6 +25,7 @@ final class WiretapStore {
     @ObservationIgnored private let systemAudioTap: SystemAudioTap
     @ObservationIgnored private let mixerWriter: AudioMixerWriter
     @ObservationIgnored private let permissionManager: PermissionManager
+    @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
     @ObservationIgnored private var activeRecordingID: Recording.ID?
     @ObservationIgnored private var activeFinalURL: URL?
     @ObservationIgnored private var activeMicrophoneURL: URL?
@@ -37,7 +38,8 @@ final class WiretapStore {
         playbackController: AudioPlaybackController = AudioPlaybackController(),
         systemAudioTap: SystemAudioTap = SystemAudioTap(),
         mixerWriter: AudioMixerWriter = AudioMixerWriter(),
-        permissionManager: PermissionManager = PermissionManager()
+        permissionManager: PermissionManager = PermissionManager(),
+        minimumFreeDiskSpaceBytes: Int64 = 1_000_000_000
     ) {
         self.recordings = recordings
         self.selectedRecordingID = recordings.first?.id
@@ -47,6 +49,7 @@ final class WiretapStore {
         self.systemAudioTap = systemAudioTap
         self.mixerWriter = mixerWriter
         self.permissionManager = permissionManager
+        self.minimumFreeDiskSpaceBytes = minimumFreeDiskSpaceBytes
     }
 
     var filteredRecordings: [Recording] {
@@ -133,6 +136,8 @@ final class WiretapStore {
         }
 
         do {
+            try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
+
             let id = UUID()
             let finalURL = try repository.recordingURL(for: id)
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
@@ -390,6 +395,21 @@ final class WiretapStore {
             saveLibrary()
             repository.deleteTemporaryFiles(sourceURLs)
         } catch {
+            let interruptedRecording = Recording(
+                id: id,
+                title: title,
+                createdAt: Date(),
+                duration: max(durationFallback, 1),
+                fileURL: nil,
+                fileSizeBytes: 0,
+                sampleRate: 48_000,
+                channelCount: 2,
+                sourceSummary: "Recording could not be finalized",
+                status: .interrupted
+            )
+            recordings.insert(interruptedRecording, at: 0)
+            selectedRecordingID = interruptedRecording.id
+            saveLibrary()
             repository.deleteTemporaryFiles(sourceURLs)
             notice = WiretapNotice(title: "Finalization Failed", message: error.localizedDescription)
         }

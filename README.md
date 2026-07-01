@@ -41,6 +41,8 @@ To notarize the DMG, also set `WIRETAP_NOTARIZE=1`, `APPLE_ID`, `APPLE_TEAM_ID`,
 
 ## GitHub Releases
 
+CI and release jobs run on GitHub's `macos-26` runner so Swift 6.2 is available.
+
 Pushing a `v<CFBundleShortVersionString>` tag runs the release workflow, builds a release DMG, signs it with Developer ID, notarizes it, staples it, and uploads it to GitHub Releases.
 
 Required repository secrets:

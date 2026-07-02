@@ -17,6 +17,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
     private var ioProcID: AudioDeviceIOProcID?
     private var writer: AudioBufferListFileWriter?
     private var startedAt: Date?
+    private let logger = WiretapLog.capture
 
     var isRecording: Bool {
         ioProcID != nil
@@ -35,6 +36,10 @@ final class MicrophoneRecorder: MicrophoneRecording {
             }
 
             let inputFormat = try inputFormat(for: device)
+            let deviceUID = (try? device.uid) ?? "unknown"
+            logger.info(
+                "Preparing microphone capture device=\(device.id, privacy: .public) uid=\(deviceUID, privacy: .private(mask: .hash)) format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) output=\(url.lastPathComponent, privacy: .public)"
+            )
             let writer = try AudioBufferListFileWriter(outputURL: url, inputFormat: inputFormat)
             self.device = device
             self.writer = writer
@@ -60,7 +65,9 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
             self.ioProcID = ioProcID
             self.startedAt = Date()
+            logger.info("Microphone capture started device=\(device.id, privacy: .public)")
         } catch {
+            logger.error("Microphone capture failed: \(error.localizedDescription, privacy: .public)")
             stopRecording()
             throw error
         }
@@ -68,6 +75,8 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
     @discardableResult
     func stopRecording() -> CaptureStopResult {
+        let wasRecording = device != nil || writer != nil
+
         if let device, let ioProcID {
             AudioDeviceStop(device.id, ioProcID)
             AudioDeviceDestroyIOProcID(device.id, ioProcID)
@@ -75,16 +84,24 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
         let flushResult = writer?.flush()
-        device = nil
-        ioProcID = nil
-        writer = nil
-        startedAt = nil
-        return CaptureStopResult(
+        let result = CaptureStopResult(
             duration: duration,
             capturedFrameCount: flushResult?.capturedFrameCount ?? 0,
             droppedFrameCount: flushResult?.droppedFrameCount ?? 0,
             writeError: flushResult?.writeError
         )
+        device = nil
+        ioProcID = nil
+        writer = nil
+        startedAt = nil
+
+        if wasRecording {
+            logger.info(
+                "Microphone capture stopped duration=\(result.duration, privacy: .public) capturedFrames=\(result.capturedFrameCount, privacy: .public) droppedFrames=\(result.droppedFrameCount, privacy: .public) writeError=\(result.writeError?.localizedDescription ?? "none", privacy: .public)"
+            )
+        }
+
+        return result
     }
 
     private func inputFormat(for device: AudioHardwareDevice) throws -> AVAudioFormat {

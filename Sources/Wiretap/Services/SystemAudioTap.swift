@@ -17,6 +17,7 @@ final class SystemAudioTap: SystemAudioTapping {
     private var aggregateDevice: AudioHardwareAggregateDevice?
     private var ioProcID: AudioDeviceIOProcID?
     private var writer: AudioBufferListFileWriter?
+    private let logger = WiretapLog.capture
 
     var isRunning: Bool {
         ioProcID != nil
@@ -32,6 +33,9 @@ final class SystemAudioTap: SystemAudioTapping {
         do {
             let excludedProcesses = try currentProcessExclusionList()
             let outputDeviceUID = try defaultOutputDeviceUID()
+            logger.info(
+                "Preparing system audio tap output=\(outputURL.lastPathComponent, privacy: .public) excludedProcesses=\(excludedProcesses.count, privacy: .public)"
+            )
             let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: excludedProcesses)
             tapDescription.uuid = UUID()
             tapDescription.name = "Wiretap System Audio"
@@ -54,6 +58,9 @@ final class SystemAudioTap: SystemAudioTapping {
                 try system.destroyProcessTap(tap)
                 throw SystemAudioTapError.unsupportedFormat
             }
+            logger.info(
+                "System audio tap format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) outputDevice=\(outputDeviceUID, privacy: .private(mask: .hash)) tap=\(tapUID, privacy: .private(mask: .hash))"
+            )
 
             let writer = try AudioBufferListFileWriter(outputURL: outputURL, inputFormat: inputFormat)
 
@@ -100,8 +107,10 @@ final class SystemAudioTap: SystemAudioTapping {
             }
 
             self.ioProcID = ioProcID
+            logger.info("System audio tap started aggregateDevice=\(aggregateDevice.id, privacy: .public)")
         } catch {
             let mappedError = SystemAudioTapError.map(error)
+            logger.error("System audio tap failed: \(mappedError.localizedDescription, privacy: .public)")
             stop()
             throw mappedError
         }
@@ -109,6 +118,8 @@ final class SystemAudioTap: SystemAudioTapping {
 
     @discardableResult
     func stop() -> CaptureStopResult {
+        let wasRunning = aggregateDevice != nil || tap != nil || writer != nil
+
         if let aggregateDevice, let ioProcID {
             AudioDeviceStop(aggregateDevice.id, ioProcID)
             AudioDeviceDestroyIOProcID(aggregateDevice.id, ioProcID)
@@ -123,15 +134,23 @@ final class SystemAudioTap: SystemAudioTapping {
         }
 
         let flushResult = writer?.flush()
-        ioProcID = nil
-        aggregateDevice = nil
-        tap = nil
-        writer = nil
-        return CaptureStopResult(
+        let result = CaptureStopResult(
             capturedFrameCount: flushResult?.capturedFrameCount ?? 0,
             droppedFrameCount: flushResult?.droppedFrameCount ?? 0,
             writeError: flushResult?.writeError
         )
+        ioProcID = nil
+        aggregateDevice = nil
+        tap = nil
+        writer = nil
+
+        if wasRunning {
+            logger.info(
+                "System audio tap stopped capturedFrames=\(result.capturedFrameCount, privacy: .public) droppedFrames=\(result.droppedFrameCount, privacy: .public) writeError=\(result.writeError?.localizedDescription ?? "none", privacy: .public)"
+            )
+        }
+
+        return result
     }
 
     private func currentProcessExclusionList() throws -> [AudioObjectID] {

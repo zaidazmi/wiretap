@@ -69,7 +69,7 @@ Required repository secrets:
 - Captures all system output audio except Wiretap itself when Core Audio can resolve the current process.
 - Captures the current macOS default input device.
 - Writes source streams to temporary `.m4a` files, then finalizes one 48 kHz stereo AAC `.m4a`.
-- Applies source alignment, drift correction, and peak limiting during offline mixing.
+- Applies source alignment, silence padding, and peak limiting during offline mixing without pitch-shifting captured audio.
 - Checks available disk space before starting a recording.
 - Stores finished recordings under `Application Support/<bundle-id>/Recordings`.
 - Stores interrupted source files under `Application Support/<bundle-id>/Recovery` when needed.
@@ -91,7 +91,7 @@ For an app-bundle launch smoke:
 Scripts/smoke-app.sh debug
 ```
 
-The current suite covers library persistence, metadata migration, missing-file repair, active-recording recovery, search/rename/delete/reveal/export/share flows, Core Audio permission-error mapping, queued file writes, source alignment, drift correction, duration accuracy, and clipping prevention. The smoke script builds `Wiretap.app`, verifies app metadata and signing, launches the menu bar app, and terminates the launched process.
+The current suite covers library persistence, metadata migration, missing-file repair, active-recording recovery, search/rename/delete/reveal/export/share flows, Core Audio permission-error mapping, queued file writes, source alignment, silence padding, duration accuracy, and clipping prevention. The smoke script builds `Wiretap.app`, verifies app metadata and signing, launches the menu bar app, and terminates the launched process.
 
 Hardware capture behavior still needs manual verification across speakers, wired headphones, Bluetooth headphones, default input switching, and sleep/wake.
 

@@ -5,11 +5,27 @@ import Observation
 private enum RecordingFinalizationStrategy {
     case mixSources
     case retainSources
+
+    var diagnosticName: String {
+        switch self {
+        case .mixSources: "mixSources"
+        case .retainSources: "retainSources"
+        }
+    }
 }
 
 private enum RecordingStopReason {
     case userInitiated
     case interrupted(RecordingInterruptionReason)
+
+    var diagnosticName: String {
+        switch self {
+        case .userInitiated:
+            "userInitiated"
+        case let .interrupted(reason):
+            "interrupted.\(reason.rawValue)"
+        }
+    }
 
     var status: Recording.Status {
         switch self {
@@ -150,6 +166,7 @@ final class WiretapStore {
     @ObservationIgnored private let permissionManager: PermissionManager
     @ObservationIgnored private let fileActions: RecordingFileActions
     @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
+    @ObservationIgnored private let logger = WiretapLog.capture
     @ObservationIgnored private var activeRecordingID: Recording.ID?
     @ObservationIgnored private var activeFinalURL: URL?
     @ObservationIgnored private var activeMicrophoneURL: URL?
@@ -327,9 +344,13 @@ final class WiretapStore {
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
             let requestedCaptureSources = captureMode.sources
+            let requestedCaptureMode = captureMode.rawValue
             var captureSources = Set<RecordingSource>()
             cleanupURLs = [microphoneURL, systemAudioURL]
             pendingRecordingID = id
+            logger.info(
+                "Starting recording id=\(id.uuidString, privacy: .public) requestedSources=\(WiretapLog.sourceSummary(requestedCaptureSources), privacy: .public) mode=\(requestedCaptureMode, privacy: .public)"
+            )
             upsertRecording(
                 Recording(
                     id: id,
@@ -395,6 +416,13 @@ final class WiretapStore {
             selectedRecordingID = id
             saveLibrary()
         } catch {
+            if let pendingRecordingID {
+                logger.error(
+                    "Recording start failed id=\(pendingRecordingID.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
+            } else {
+                logger.error("Recording start failed before id allocation error=\(error.localizedDescription, privacy: .public)")
+            }
             microphoneRecorder.stopRecording()
             systemAudioTap.stop()
             repository.deleteTemporaryFiles(cleanupURLs)
@@ -766,6 +794,9 @@ final class WiretapStore {
             resetRecordingState()
             return
         }
+        logger.info(
+            "Stopping recording id=\(id.uuidString, privacy: .public) reason=\(reason.diagnosticName, privacy: .public) finalization=\(finalization.diagnosticName, privacy: .public) elapsed=\(duration, privacy: .public) activeSources=\(WiretapLog.sourceSummary(captureSources), privacy: .public) capturedSources=\(WiretapLog.sourceSummary(capturedSources), privacy: .public) micFrames=\(microphoneResult.capturedFrameCount, privacy: .public) systemFrames=\(systemAudioResult.capturedFrameCount, privacy: .public) micDropped=\(microphoneResult.droppedFrameCount, privacy: .public) systemDropped=\(systemAudioResult.droppedFrameCount, privacy: .public)"
+        )
 
         resetRecordingState()
 
@@ -958,15 +989,19 @@ final class WiretapStore {
         completionNotice: WiretapNotice? = nil
     ) async {
         do {
+            logger.info(
+                "Finalizing recording id=\(id.uuidString, privacy: .public) inputCount=\(inputs.count, privacy: .public)"
+            )
             let mixResult = try await mixerWriter.mix(inputs: inputs, outputURL: finalURL)
             let sourceSummary = reason.sourceSummary(for: mixResult.sources)
+            let fileSize = repository.fileSize(for: finalURL)
             let recording = Recording(
                 id: id,
                 title: title,
                 createdAt: Date(),
                 duration: max(mixResult.duration, durationFallback, 1),
                 fileURL: finalURL,
-                fileSizeBytes: repository.fileSize(for: finalURL),
+                fileSizeBytes: fileSize,
                 sampleRate: 48_000,
                 channelCount: 2,
                 sourceSummary: sourceSummary,
@@ -978,7 +1013,13 @@ final class WiretapStore {
             saveLibrary()
             repository.deleteTemporaryFiles(cleanupURLs)
             notice = completionNotice ?? reason.completionNotice
+            logger.info(
+                "Finalized recording id=\(id.uuidString, privacy: .public) duration=\(recording.duration, privacy: .public) fileSize=\(fileSize, privacy: .public) sources=\(WiretapLog.sourceSummary(mixResult.sources), privacy: .public)"
+            )
         } catch {
+            logger.error(
+                "Finalization failed id=\(id.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
             retainInterruptedSources(
                 id: id,
                 title: title,
@@ -1017,6 +1058,9 @@ final class WiretapStore {
         selectedRecordingID = interruptedRecording.id
         saveLibrary()
         notice = reason.failureNotice(error: error, didRetainSources: didRetainSources)
+        logger.warning(
+            "Retained interrupted recording id=\(id.uuidString, privacy: .public) retainedSources=\(didRetainSources, privacy: .public) error=\(error?.localizedDescription ?? "none", privacy: .public)"
+        )
     }
 }
 

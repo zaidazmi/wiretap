@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 
 struct AudioMixerWriter {
+    private let logger = WiretapLog.mixer
     private let outputSampleRate = 48_000.0
     private let outputChannelCount: AVAudioChannelCount = 2
     private let maximumFrameCount: AVAudioFrameCount = 4_096
@@ -9,8 +10,10 @@ struct AudioMixerWriter {
     private let maximumConsecutiveRenderStalls = 128
 
     func mix(inputs: [AudioMixerInput], outputURL: URL) async throws -> AudioMixResult {
+        logger.info("Mix requested inputs=\(inputs.count, privacy: .public) output=\(outputURL.lastPathComponent, privacy: .public)")
         let usableInputs = try await usableInputs(from: inputs)
         guard !usableInputs.isEmpty else {
+            logger.error("Mix failed: no usable audio inputs")
             throw RecordingLibraryError.missingFile
         }
 
@@ -22,15 +25,25 @@ struct AudioMixerWriter {
         let timelineDuration = renderInputs
             .map { $0.input.input.startOffset + $0.outputDuration }
             .max() ?? 0
+        for input in renderInputs {
+            logger.info(
+                "Mix input source=\(input.input.input.source.rawValue, privacy: .public) duration=\(input.input.duration, privacy: .public) offset=\(input.input.input.startOffset, privacy: .public) target=\(input.input.input.targetDuration ?? 0, privacy: .public) outputDuration=\(input.outputDuration, privacy: .public)"
+            )
+        }
+        logger.info("Rendering mix timelineDuration=\(timelineDuration, privacy: .public)")
         let renderedDuration = try render(
             renderInputs: renderInputs,
             timelineDuration: timelineDuration,
             outputURL: outputURL
         )
 
+        let sources = usableInputs.map(\.input.source)
+        logger.info(
+            "Mix completed duration=\(renderedDuration, privacy: .public) sources=\(WiretapLog.sourceSummary(sources), privacy: .public)"
+        )
         return AudioMixResult(
             duration: renderedDuration,
-            sources: usableInputs.map(\.input.source)
+            sources: sources
         )
     }
 
@@ -43,19 +56,33 @@ struct AudioMixerWriter {
             do {
                 tracks = try await asset.loadTracks(withMediaType: .audio)
             } catch {
+                logger.error(
+                    "Skipping mix input source=\(input.source.rawValue, privacy: .public) reason=trackLoadFailed error=\(error.localizedDescription, privacy: .public)"
+                )
                 continue
             }
 
-            guard tracks.first != nil else { continue }
+            guard tracks.first != nil else {
+                logger.warning("Skipping mix input source=\(input.source.rawValue, privacy: .public) reason=noAudioTrack")
+                continue
+            }
 
             let duration: CMTime
             do {
                 duration = try await asset.load(.duration)
             } catch {
+                logger.error(
+                    "Skipping mix input source=\(input.source.rawValue, privacy: .public) reason=durationLoadFailed error=\(error.localizedDescription, privacy: .public)"
+                )
                 continue
             }
 
-            guard duration.seconds.isFinite, duration.seconds > 0 else { continue }
+            guard duration.seconds.isFinite, duration.seconds > 0 else {
+                logger.warning(
+                    "Skipping mix input source=\(input.source.rawValue, privacy: .public) reason=invalidDuration duration=\(duration.seconds, privacy: .public)"
+                )
+                continue
+            }
 
             usableInputs.append(UsableAudioInput(input: input, duration: duration.seconds))
         }

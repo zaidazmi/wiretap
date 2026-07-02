@@ -16,10 +16,9 @@ struct MenuBarView: View {
                     MenuNoticeBanner(
                         notice: notice,
                         openRecovery: { recovery in
-                            store.openSettings(for: recovery)
-                            store.notice = nil
+                            store.resolveNoticeRecovery(recovery)
                         },
-                        dismiss: { store.notice = nil }
+                        dismiss: { store.dismissNotice() }
                     )
                 }
 

@@ -696,6 +696,37 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDismissNoticeClearsCurrentNotice() {
+        let store = WiretapStore(minimumFreeDiskSpaceBytes: 0)
+        store.notice = WiretapNotice(title: "Playback Failed", message: "Could not start playback.")
+
+        store.dismissNotice()
+
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
+    func testResolveNoticeRecoveryOpensSettingsAndClearsNotice() {
+        let openedTarget = MutablePrivacySettingsTarget()
+        let store = WiretapStore(
+            permissionManager: PermissionManager(openPrivacySettings: { target in
+                openedTarget.value = target
+            }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.notice = WiretapNotice(
+            title: "System Audio Needs Review",
+            message: "Open Privacy Settings.",
+            recovery: .systemAudioSettings
+        )
+
+        store.resolveNoticeRecovery(.systemAudioSettings)
+
+        XCTAssertEqual(openedTarget.value, .systemAudio)
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
     func testSelectedRecordingFollowsSearchFilter() {
         let designRecording = makeRecording(title: "Design Review")
         let interviewRecording = makeRecording(title: "Customer Interview")
@@ -1064,6 +1095,10 @@ private final class MutablePermissionState: @unchecked Sendable {
     init(_ value: PermissionState) {
         self.value = value
     }
+}
+
+private final class MutablePrivacySettingsTarget: @unchecked Sendable {
+    var value: PrivacySettingsTarget?
 }
 
 @MainActor

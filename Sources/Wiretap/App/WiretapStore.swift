@@ -613,6 +613,15 @@ final class WiretapStore {
         }
     }
 
+    func dismissNotice() {
+        notice = nil
+    }
+
+    func resolveNoticeRecovery(_ recovery: WiretapNoticeRecovery) {
+        openSettings(for: recovery)
+        dismissNotice()
+    }
+
     private func saveLibrary() {
         do {
             try persistLibrary()

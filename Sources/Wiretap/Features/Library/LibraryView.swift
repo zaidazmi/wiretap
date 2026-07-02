@@ -7,6 +7,20 @@ struct LibraryView: View {
         VStack(spacing: 0) {
             LibraryStatusStrip(store: store)
 
+            if let notice = store.notice {
+                Divider()
+
+                LibraryNoticeBanner(
+                    notice: notice,
+                    onRecovery: { recovery in
+                        store.resolveNoticeRecovery(recovery)
+                    },
+                    onDismiss: {
+                        store.dismissNotice()
+                    }
+                )
+            }
+
             Divider()
 
             NavigationSplitView {
@@ -40,6 +54,56 @@ struct LibraryView: View {
                 RecordingControlView(store: store, style: .toolbar)
             }
         }
+    }
+}
+
+private struct LibraryNoticeBanner: View {
+    let notice: WiretapNotice
+    let onRecovery: (WiretapNoticeRecovery) -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: notice.recovery == nil ? "info.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.title3)
+                .foregroundStyle(notice.recovery == nil ? Color.accentColor : Color.orange)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(notice.title)
+                    .font(.subheadline.weight(.semibold))
+                Text(notice.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 16)
+
+            if let recovery = notice.recovery {
+                Button {
+                    onRecovery(recovery)
+                } label: {
+                    Label(recovery.buttonTitle, systemImage: "gear")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .accessibilityIdentifier(WiretapAccessibility.Library.noticeRecoveryButton)
+            }
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityIdentifier(WiretapAccessibility.Library.noticeDismissButton)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(.bar)
+        .accessibilityIdentifier(WiretapAccessibility.Library.noticeBanner)
     }
 }
 

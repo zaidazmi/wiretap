@@ -37,6 +37,9 @@ enum WiretapAccessibility {
         static let statusStopButton = "wiretap.library.status.stop"
         static let toolbarPermissionsButton = "wiretap.library.toolbar.permissions"
         static let toolbarRecordButton = "wiretap.library.toolbar.record"
+        static let noticeBanner = "wiretap.library.notice"
+        static let noticeDismissButton = "wiretap.library.notice.dismiss"
+        static let noticeRecoveryButton = "wiretap.library.notice.recovery"
 
         static func recordingRow(id: Recording.ID) -> String {
             "wiretap.library.recordingRow.\(id.uuidString)"

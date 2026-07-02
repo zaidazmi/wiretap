@@ -136,6 +136,91 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSystemOnlyRecordingSkipsMicrophoneAndFinalizesSystemAudio() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap(
+            stopResult: CaptureStopResult(duration: 0.16, capturedFrameCount: 7_680),
+            startWriter: { [weak self] url in
+                try self?.writeTone(to: url, duration: 0.16, frequency: 440)
+            }
+        )
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .denied }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.captureMode = .systemOnly
+
+        store.startRecording()
+
+        let activeRecording = try XCTUnwrap(store.recordings.first)
+        XCTAssertTrue(store.isRecording)
+        XCTAssertEqual(activeRecording.sourceSummary, "System audio")
+        XCTAssertEqual(systemAudioTap.startCallCount, 1)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 0)
+        XCTAssertEqual(store.permissionState, .denied)
+
+        store.stopRecording()
+
+        try await waitUntil("system-only recording finalizes") {
+            store.recordings.first?.status == .finalized
+        }
+
+        let recording = try XCTUnwrap(store.recordings.first)
+        XCTAssertEqual(recording.status, .finalized)
+        XCTAssertEqual(recording.sourceSummary, "System audio")
+        XCTAssertGreaterThan(recording.fileSizeBytes, 0)
+        XCTAssertNil(store.notice)
+        XCTAssertEqual(systemAudioTap.stopCallCount, 1)
+        XCTAssertEqual(microphoneRecorder.stopCallCount, 1)
+    }
+
+    @MainActor
+    func testMicrophoneOnlyRecordingSkipsSystemAudioAndFinalizesMicrophone() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap(startError: SystemAudioTapError.permissionDenied)
+        let microphoneRecorder = FakeMicrophoneRecorder(
+            stopResult: CaptureStopResult(duration: 0.16, capturedFrameCount: 7_680),
+            startWriter: { [weak self] url in
+                try self?.writeTone(to: url, duration: 0.16, frequency: 660)
+            }
+        )
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.captureMode = .microphoneOnly
+
+        store.startRecording()
+
+        let activeRecording = try XCTUnwrap(store.recordings.first)
+        XCTAssertTrue(store.isRecording)
+        XCTAssertEqual(activeRecording.sourceSummary, "default microphone")
+        XCTAssertEqual(systemAudioTap.startCallCount, 0)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 1)
+
+        store.stopRecording()
+
+        try await waitUntil("microphone-only recording finalizes") {
+            store.recordings.first?.status == .finalized
+        }
+
+        let recording = try XCTUnwrap(store.recordings.first)
+        XCTAssertEqual(recording.status, .finalized)
+        XCTAssertEqual(recording.sourceSummary, "default microphone")
+        XCTAssertGreaterThan(recording.fileSizeBytes, 0)
+        XCTAssertNil(store.notice)
+        XCTAssertEqual(systemAudioTap.stopCallCount, 1)
+        XCTAssertEqual(microphoneRecorder.stopCallCount, 1)
+    }
+
+    @MainActor
     func testStartRecordingReportsLowDiskSpaceWithoutChangingCaptureStates() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap()

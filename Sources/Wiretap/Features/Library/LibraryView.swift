@@ -44,7 +44,7 @@ struct LibraryView: View {
 }
 
 private struct LibraryStatusStrip: View {
-    let store: WiretapStore
+    @Bindable var store: WiretapStore
 
     var body: some View {
         if store.isRecording {
@@ -134,6 +134,13 @@ private struct LibraryStatusStrip: View {
             }
 
             Spacer()
+
+            CaptureModePicker(
+                selection: $store.captureMode,
+                isDisabled: store.isRecording,
+                accessibilityIdentifier: WiretapAccessibility.Library.captureModePicker
+            )
+            .frame(width: 310)
 
             LibraryMetric(title: "Elapsed", value: "00:00")
             LibraryMetric(title: "Recordings", value: "\(store.recordings.count)")

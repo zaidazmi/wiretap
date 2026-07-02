@@ -25,12 +25,7 @@ struct MenuBarView: View {
 
                 MenuRecordingPanel(store: store)
                 RecordingControlsView(store: store)
-                MenuCaptureSources(
-                    permissionState: store.permissionState,
-                    permissionTitle: store.capturePermissionTitle,
-                    systemAudioState: store.systemAudioState,
-                    microphoneState: store.microphoneState
-                )
+                MenuCaptureSources(store: store)
             }
             .padding(16)
 
@@ -210,38 +205,45 @@ private struct MenuNoticeBanner: View {
 }
 
 private struct MenuCaptureSources: View {
-    let permissionState: PermissionState
-    let permissionTitle: String
-    let systemAudioState: CaptureSourceState
-    let microphoneState: CaptureSourceState
+    @Bindable var store: WiretapStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Capture")
                 .font(.subheadline.weight(.semibold))
 
+            CaptureModePicker(
+                selection: $store.captureMode,
+                isDisabled: store.isRecording,
+                accessibilityIdentifier: WiretapAccessibility.MenuBar.captureModePicker
+            )
+
             SourceRow(
                 title: "System audio",
                 systemImage: "speaker.wave.2.fill",
-                state: systemAudioState,
+                state: store.systemAudioState,
                 identifier: WiretapAccessibility.MenuBar.systemAudioSource
             )
             SourceRow(
                 title: "Default microphone",
                 systemImage: "mic.fill",
-                state: microphoneState,
+                state: store.microphoneState,
                 identifier: WiretapAccessibility.MenuBar.microphoneSource
             )
 
             HStack {
-                Image(systemName: permissionState == .ready ? "checkmark.shield.fill" : "lock.shield")
-                    .foregroundStyle(systemAudioState == .unavailable ? .orange : permissionState == .ready ? .green : .secondary)
-                Text(permissionTitle)
+                Image(systemName: isPermissionReady ? "checkmark.shield.fill" : "lock.shield")
+                    .foregroundStyle(store.systemAudioState == .unavailable ? .orange : isPermissionReady ? .green : .secondary)
+                Text(store.capturePermissionTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
         }
+    }
+
+    private var isPermissionReady: Bool {
+        !store.captureMode.requiresMicrophone || store.permissionState == .ready
     }
 }
 

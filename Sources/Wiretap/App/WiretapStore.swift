@@ -140,6 +140,7 @@ final class WiretapStore {
     var playbackDuration: TimeInterval = 0
     var systemAudioState: CaptureSourceState = .notChecked
     var microphoneState: CaptureSourceState = .notChecked
+    var captureMode: RecordingCaptureMode = .systemAndMicrophone
 
     @ObservationIgnored private let repository: RecordingLibraryRepository
     @ObservationIgnored private let microphoneRecorder: any MicrophoneRecording
@@ -229,21 +230,25 @@ final class WiretapStore {
 
     var recordingSubtitle: String {
         if isRecording {
-            return activeCaptureSources.contains(.systemAudio)
-                ? "System audio and default microphone capture active"
-                : "Default microphone capture active"
+            return "\(Recording.sourceSummary(for: Array(activeCaptureSources))) capture active"
         }
 
-        if permissionState != .ready {
+        if captureMode.requiresMicrophone, permissionState != .ready {
             return "Permissions pending review"
         }
 
-        return systemAudioState == .unavailable
-            ? "Microphone ready, system audio needs review"
-            : "Permissions ready"
+        if captureMode.requiresSystemAudio, systemAudioState == .unavailable {
+            return "System audio needs review"
+        }
+
+        return "\(captureMode.detailTitle) selected"
     }
 
     var capturePermissionTitle: String {
+        if !captureMode.requiresMicrophone {
+            return systemAudioState == .unavailable ? "System Audio Needs Review" : "System Audio Selected"
+        }
+
         if systemAudioState == .unavailable, permissionState == .ready {
             return "System Audio Needs Review"
         }
@@ -252,6 +257,10 @@ final class WiretapStore {
     }
 
     var capturePermissionSummary: String {
+        if !captureMode.requiresMicrophone {
+            return "System audio capture uses macOS Audio Capture permission."
+        }
+
         if systemAudioState == .unavailable, permissionState == .ready {
             return "Microphone access is ready. System audio capture needs Settings review."
         }
@@ -260,7 +269,7 @@ final class WiretapStore {
     }
 
     var canRecord: Bool {
-        permissionState != .denied
+        !captureMode.requiresMicrophone || permissionState != .denied
     }
 
     var isTimelineActive: Bool {
@@ -317,6 +326,7 @@ final class WiretapStore {
             let finalURL = try repository.recordingURL(for: id)
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
+            let requestedCaptureSources = captureMode.sources
             var captureSources = Set<RecordingSource>()
             cleanupURLs = [microphoneURL, systemAudioURL]
             pendingRecordingID = id
@@ -330,26 +340,31 @@ final class WiretapStore {
                     fileSizeBytes: 0,
                     sampleRate: 48_000,
                     channelCount: 2,
-                    sourceSummary: "Recorded audio",
+                    sourceSummary: Recording.sourceSummary(for: Array(requestedCaptureSources)),
                     status: .recording
                 )
             )
             selectedRecordingID = id
             try persistLibrary()
 
-            do {
-                try systemAudioTap.start(writingTo: systemAudioURL)
-                systemAudioState = .ready
-                captureSources.insert(.systemAudio)
-                activeSourceStartDates[.systemAudio] = Date()
-            } catch {
-                systemAudioState = .unavailable
-                throw RecordingStartFailure(notice: systemAudioStartFailureNotice(for: error))
+            if requestedCaptureSources.contains(.systemAudio) {
+                do {
+                    try systemAudioTap.start(writingTo: systemAudioURL)
+                    systemAudioState = .ready
+                    captureSources.insert(.systemAudio)
+                    activeSourceStartDates[.systemAudio] = Date()
+                } catch {
+                    systemAudioState = .unavailable
+                    throw RecordingStartFailure(notice: systemAudioStartFailureNotice(for: error))
+                }
             }
-            try microphoneRecorder.startRecording(to: microphoneURL)
-            microphoneState = .ready
-            captureSources.insert(.microphone)
-            activeSourceStartDates[.microphone] = Date()
+
+            if requestedCaptureSources.contains(.microphone) {
+                try microphoneRecorder.startRecording(to: microphoneURL)
+                microphoneState = .ready
+                captureSources.insert(.microphone)
+                activeSourceStartDates[.microphone] = Date()
+            }
 
             activeRecordingID = id
             activeFinalURL = finalURL
@@ -360,7 +375,9 @@ final class WiretapStore {
             isRecording = true
             recordingStartedAt = startedAt
             elapsedSeconds = 0
-            permissionState = .ready
+            if requestedCaptureSources.contains(.microphone) {
+                permissionState = .ready
+            }
             upsertRecording(
                 Recording(
                     id: id,
@@ -392,7 +409,11 @@ final class WiretapStore {
             } else if case RecordingLibraryError.insufficientDiskSpace = error {
                 notice = WiretapNotice(title: "Not Enough Disk Space", message: error.localizedDescription)
             } else {
-                microphoneState = .unavailable
+                if captureMode.requiresMicrophone {
+                    microphoneState = .unavailable
+                } else {
+                    systemAudioState = .unavailable
+                }
                 notice = WiretapNotice(title: "Recording Error", message: error.localizedDescription)
             }
         }

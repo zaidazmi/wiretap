@@ -713,10 +713,14 @@ final class WiretapStore {
         let sourceStartDates = activeSourceStartDates
         let captureWriteError = microphoneResult.writeError ?? systemAudioResult.writeError
         let captureHealthError = activeCaptureFailures.values.first
-        let missingCaptureSource = missingCaptureSource(
+        let capturedSources = capturedSources(
             captureSources: captureSources,
             microphoneResult: microphoneResult,
             systemAudioResult: systemAudioResult
+        )
+        let missingCaptureSource = missingCaptureSource(
+            captureSources: captureSources,
+            capturedSources: capturedSources
         )
         let captureDropError = captureDropFailure(
             captureSources: captureSources,
@@ -750,18 +754,6 @@ final class WiretapStore {
                 return
             }
 
-            if let missingCaptureSource {
-                retainInterruptedSources(
-                    id: id,
-                    title: title,
-                    durationFallback: duration,
-                    cleanupURLs: cleanupURLs,
-                    reason: reason,
-                    error: CaptureSourceFailure.noCapturedFrames(source: missingCaptureSource)
-                )
-                return
-            }
-
             if let captureWriteError {
                 retainInterruptedSources(
                     id: id,
@@ -786,10 +778,31 @@ final class WiretapStore {
                 return
             }
 
+            if capturedSources.isEmpty {
+                retainInterruptedSources(
+                    id: id,
+                    title: title,
+                    durationFallback: duration,
+                    cleanupURLs: cleanupURLs,
+                    reason: reason,
+                    error: missingCaptureError(
+                        missingSource: missingCaptureSource,
+                        expectedSourceCount: captureSources.count
+                    )
+                )
+                return
+            }
+
+            let completionNotice = partialCaptureNotice(
+                missingSource: missingCaptureSource,
+                capturedSources: capturedSources,
+                reason: reason
+            )
+
             let inputs = mixerInputs(
                 microphoneURL: microphoneURL,
                 systemAudioURL: systemAudioURL,
-                captureSources: captureSources,
+                captureSources: capturedSources,
                 sourceStartDates: sourceStartDates,
                 duration: duration
             )
@@ -802,7 +815,8 @@ final class WiretapStore {
                     finalURL: finalURL,
                     inputs: inputs,
                     cleanupURLs: cleanupURLs,
-                    reason: reason
+                    reason: reason,
+                    completionNotice: completionNotice
                 )
             }
 
@@ -819,18 +833,72 @@ final class WiretapStore {
 
     private func missingCaptureSource(
         captureSources: Set<RecordingSource>,
-        microphoneResult: CaptureStopResult,
-        systemAudioResult: CaptureStopResult
+        capturedSources: Set<RecordingSource>
     ) -> RecordingSource? {
-        if captureSources.contains(.systemAudio), !systemAudioResult.didCaptureFrames {
+        if captureSources.contains(.systemAudio), !capturedSources.contains(.systemAudio) {
             return .systemAudio
         }
 
-        if captureSources.contains(.microphone), !microphoneResult.didCaptureFrames {
+        if captureSources.contains(.microphone), !capturedSources.contains(.microphone) {
             return .microphone
         }
 
         return nil
+    }
+
+    private func capturedSources(
+        captureSources: Set<RecordingSource>,
+        microphoneResult: CaptureStopResult,
+        systemAudioResult: CaptureStopResult
+    ) -> Set<RecordingSource> {
+        var sources = Set<RecordingSource>()
+
+        if captureSources.contains(.systemAudio), systemAudioResult.didCaptureFrames {
+            sources.insert(.systemAudio)
+        }
+
+        if captureSources.contains(.microphone), microphoneResult.didCaptureFrames {
+            sources.insert(.microphone)
+        }
+
+        return sources
+    }
+
+    private func missingCaptureError(
+        missingSource: RecordingSource?,
+        expectedSourceCount: Int
+    ) -> CaptureSourceFailure {
+        guard expectedSourceCount <= 1, let missingSource else {
+            return .noCapturedFramesFromAnySource
+        }
+
+        return .noCapturedFrames(source: missingSource)
+    }
+
+    private func partialCaptureNotice(
+        missingSource: RecordingSource?,
+        capturedSources: Set<RecordingSource>,
+        reason: RecordingStopReason
+    ) -> WiretapNotice? {
+        guard case .userInitiated = reason,
+              let missingSource,
+              !capturedSources.isEmpty
+        else { return nil }
+
+        switch missingSource {
+        case .systemAudio:
+            return WiretapNotice(
+                title: "System Audio Not Captured",
+                message: "Wiretap saved the microphone recording, but no system-audio buffers were captured. Make sure audio is playing and Audio Capture permission is allowed before trying again.",
+                recovery: .systemAudioSettings
+            )
+        case .microphone:
+            return WiretapNotice(
+                title: "Microphone Not Captured",
+                message: "Wiretap saved the system-audio recording, but no microphone buffers were captured. Make sure a default input device is selected and Microphone permission is allowed before trying again.",
+                recovery: .microphoneSettings
+            )
+        }
     }
 
     private func captureDropFailure(
@@ -856,7 +924,8 @@ final class WiretapStore {
         finalURL: URL,
         inputs: [AudioMixerInput],
         cleanupURLs: [URL],
-        reason: RecordingStopReason
+        reason: RecordingStopReason,
+        completionNotice: WiretapNotice? = nil
     ) async {
         do {
             let mixResult = try await mixerWriter.mix(inputs: inputs, outputURL: finalURL)
@@ -878,7 +947,7 @@ final class WiretapStore {
             selectedRecordingID = recording.id
             saveLibrary()
             repository.deleteTemporaryFiles(cleanupURLs)
-            notice = reason.completionNotice
+            notice = completionNotice ?? reason.completionNotice
         } catch {
             retainInterruptedSources(
                 id: id,
@@ -942,6 +1011,7 @@ enum WiretapNoticeRecovery: Equatable {
 
 private enum CaptureSourceFailure: LocalizedError {
     case noCapturedFrames(source: RecordingSource)
+    case noCapturedFramesFromAnySource
     case droppedFrames(source: RecordingSource, count: Int64)
     case stalled(source: RecordingSource)
 
@@ -949,6 +1019,8 @@ private enum CaptureSourceFailure: LocalizedError {
         switch self {
         case let .noCapturedFrames(source):
             "Wiretap did not receive any audio buffers from \(source.label)."
+        case .noCapturedFramesFromAnySource:
+            "Wiretap did not receive any audio buffers from system audio or the microphone."
         case let .droppedFrames(source, count):
             "Wiretap dropped \(count) audio frames from \(source.label) before finalization completed."
         case let .stalled(source):
@@ -993,27 +1065,14 @@ private extension WiretapStore {
         sourceStartDates: [RecordingSource: Date],
         duration: TimeInterval
     ) -> [AudioMixerInput] {
-        let referenceStartDate = sourceStartDates.values.min()
-        var inputs = [
-            AudioMixerInput(
-                url: microphoneURL,
-                source: .microphone,
-                startOffset: sourceOffset(
-                    for: .microphone,
-                    from: sourceStartDates,
-                    referenceDate: referenceStartDate
-                ),
-                targetDuration: sourceTargetDuration(
-                    for: .microphone,
-                    sessionDuration: duration,
-                    sourceStartDates: sourceStartDates,
-                    referenceDate: referenceStartDate
-                )
-            )
-        ]
+        let referenceStartDate = sourceStartDates
+            .filter { captureSources.contains($0.key) }
+            .map(\.value)
+            .min()
+        var inputs: [AudioMixerInput] = []
 
         if captureSources.contains(.systemAudio) {
-            inputs.insert(
+            inputs.append(
                 AudioMixerInput(
                     url: systemAudioURL,
                     source: .systemAudio,
@@ -1028,8 +1087,27 @@ private extension WiretapStore {
                         sourceStartDates: sourceStartDates,
                         referenceDate: referenceStartDate
                     )
-                ),
-                at: 0
+                )
+            )
+        }
+
+        if captureSources.contains(.microphone) {
+            inputs.append(
+                AudioMixerInput(
+                    url: microphoneURL,
+                    source: .microphone,
+                    startOffset: sourceOffset(
+                        for: .microphone,
+                        from: sourceStartDates,
+                        referenceDate: referenceStartDate
+                    ),
+                    targetDuration: sourceTargetDuration(
+                        for: .microphone,
+                        sessionDuration: duration,
+                        sourceStartDates: sourceStartDates,
+                        referenceDate: referenceStartDate
+                    )
+                )
             )
         }
 

@@ -154,6 +154,87 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRecordAgainUsesRetainedSystemOnlySources() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let interruptedID = UUID()
+        let recoveryFolderURL = try makeRecoveryFolder(
+            for: interruptedID,
+            sources: [.systemAudio],
+            repository: repository
+        )
+        let interruptedRecording = makeRecording(
+            id: interruptedID,
+            title: "Interrupted",
+            recoveryFolderURL: recoveryFolderURL,
+            status: .interrupted,
+            sourceSummary: RecordingInterruptionReason.systemSleep.recoverySummary
+        )
+        let systemAudioTap = FakeSystemAudioTap()
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            recordings: [interruptedRecording],
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .denied }),
+            captureMode: .systemAndMicrophone,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        XCTAssertEqual(store.retryCaptureMode(for: interruptedRecording), .systemOnly)
+        XCTAssertTrue(store.canRetryRecording(interruptedRecording))
+
+        store.recordAgain(interruptedRecording)
+
+        XCTAssertTrue(store.isRecording)
+        XCTAssertEqual(store.captureMode, .systemOnly)
+        XCTAssertEqual(systemAudioTap.startCallCount, 1)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 0)
+        XCTAssertEqual(store.recordings.first?.sourceSummary, "System audio")
+    }
+
+    @MainActor
+    func testRecordAgainBlocksRetainedMicrophoneOnlySourcesWhenMicrophoneDenied() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let interruptedID = UUID()
+        let recoveryFolderURL = try makeRecoveryFolder(
+            for: interruptedID,
+            sources: [.microphone],
+            repository: repository
+        )
+        let interruptedRecording = makeRecording(
+            id: interruptedID,
+            title: "Interrupted",
+            recoveryFolderURL: recoveryFolderURL,
+            status: .interrupted,
+            sourceSummary: RecordingInterruptionReason.appTermination.recoverySummary
+        )
+        let systemAudioTap = FakeSystemAudioTap()
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            recordings: [interruptedRecording],
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .denied }),
+            captureMode: .systemOnly,
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.permissionState = .denied
+
+        XCTAssertEqual(store.retryCaptureMode(for: interruptedRecording), .microphoneOnly)
+        XCTAssertFalse(store.canRetryRecording(interruptedRecording))
+
+        store.recordAgain(interruptedRecording)
+
+        XCTAssertFalse(store.isRecording)
+        XCTAssertEqual(store.captureMode, .microphoneOnly)
+        XCTAssertEqual(systemAudioTap.startCallCount, 0)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 0)
+        XCTAssertEqual(store.notice?.recovery, .microphoneSettings)
+    }
+
+    @MainActor
     func testLoadLibraryPersistsMissingFileRepair() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let missingURL = try repository.recordingURL(for: UUID())
@@ -1122,7 +1203,8 @@ final class WiretapStoreTests: XCTestCase {
         fileURL: URL? = nil,
         recoveryFolderURL: URL? = nil,
         fileSizeBytes: Int64 = 0,
-        status: Recording.Status = .finalized
+        status: Recording.Status = .finalized,
+        sourceSummary: String = "System audio + default microphone"
     ) -> Recording {
         Recording(
             id: id,
@@ -1134,9 +1216,29 @@ final class WiretapStoreTests: XCTestCase {
             fileSizeBytes: fileSizeBytes,
             sampleRate: 48_000,
             channelCount: 2,
-            sourceSummary: "System audio + default microphone",
+            sourceSummary: sourceSummary,
             status: status
         )
+    }
+
+    private func makeRecoveryFolder(
+        for id: Recording.ID,
+        sources: Set<RecordingSource>,
+        repository: RecordingLibraryRepository
+    ) throws -> URL {
+        let recoveryFolderURL = try repository.recoveryURL(for: id)
+        try FileManager.default.createDirectory(
+            at: recoveryFolderURL,
+            withIntermediateDirectories: true
+        )
+
+        for source in sources {
+            let fileSuffix = source == .systemAudio ? "system" : "microphone"
+            let fileURL = recoveryFolderURL.appendingPathComponent("\(id.uuidString)-\(fileSuffix).m4a")
+            try Data("source".utf8).write(to: fileURL)
+        }
+
+        return recoveryFolderURL
     }
 
     @MainActor

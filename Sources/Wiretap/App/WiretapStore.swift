@@ -370,6 +370,22 @@ final class WiretapStore {
         isRecording ? stopRecording() : startRecording()
     }
 
+    func retryCaptureMode(for recording: Recording) -> RecordingCaptureMode {
+        retainedCaptureMode(for: recording)
+            ?? RecordingCaptureMode(sourceSummary: recording.sourceSummary)
+            ?? captureMode
+    }
+
+    func canRetryRecording(_ recording: Recording) -> Bool {
+        let mode = retryCaptureMode(for: recording)
+        return !mode.requiresMicrophone || permissionState != .denied
+    }
+
+    func recordAgain(_ recording: Recording) {
+        captureMode = retryCaptureMode(for: recording)
+        startRecording()
+    }
+
     func startRecording() {
         permissionState = permissionManager.currentState()
 
@@ -765,6 +781,30 @@ final class WiretapStore {
                 activeCaptureProgressDates[source] = startedAt
             }
         }
+    }
+
+    private func retainedCaptureMode(for recording: Recording) -> RecordingCaptureMode? {
+        guard let recoveryFolderURL = recording.recoveryFolderURL,
+              let contents = try? FileManager.default.contentsOfDirectory(
+                at: recoveryFolderURL,
+                includingPropertiesForKeys: nil
+              )
+        else {
+            return nil
+        }
+
+        var sources = Set<RecordingSource>()
+        for url in contents {
+            let fileName = url.lastPathComponent.lowercased()
+            if fileName.contains("-system.") {
+                sources.insert(.systemAudio)
+            }
+            if fileName.contains("-microphone.") {
+                sources.insert(.microphone)
+            }
+        }
+
+        return RecordingCaptureMode(sources: sources)
     }
 
     private func updateCaptureHealth(now: Date) {

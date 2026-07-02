@@ -5,6 +5,32 @@ enum RecordingCaptureMode: String, CaseIterable, Identifiable, Hashable, Sendabl
     case systemOnly
     case microphoneOnly
 
+    init?(sources: Set<RecordingSource>) {
+        switch sources {
+        case [.systemAudio, .microphone]:
+            self = .systemAndMicrophone
+        case [.systemAudio]:
+            self = .systemOnly
+        case [.microphone]:
+            self = .microphoneOnly
+        default:
+            return nil
+        }
+    }
+
+    init?(sourceSummary: String) {
+        switch sourceSummary.lowercased() {
+        case let summary where summary.contains("system audio + default microphone"):
+            self = .systemAndMicrophone
+        case let summary where summary.contains("system audio"):
+            self = .systemOnly
+        case let summary where summary.contains("default microphone"):
+            self = .microphoneOnly
+        default:
+            return nil
+        }
+    }
+
     var id: String {
         rawValue
     }

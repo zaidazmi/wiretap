@@ -755,16 +755,22 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testTickWarnsAndRetainsSourcesWhenCaptureSourceStalls() throws {
+    func testTickWarnsAndStillFinalizesWhenCaptureSourceStalls() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(
-            stopResult: CaptureStopResult(capturedFrameCount: 48_000)
+            stopResult: CaptureStopResult(capturedFrameCount: 48_000),
+            startWriter: { [weak self] url in
+                try self?.writeTone(to: url, duration: 0.2, frequency: 440)
+            }
         )
         let microphoneRecorder = FakeMicrophoneRecorder(
             stopResult: CaptureStopResult(
                 duration: 20,
                 capturedFrameCount: 96_000
-            )
+            ),
+            startWriter: { [weak self] url in
+                try self?.writeTone(to: url, duration: 0.2, frequency: 660)
+            }
         )
         let store = WiretapStore(
             repository: repository,
@@ -792,10 +798,16 @@ final class WiretapStoreTests: XCTestCase {
 
         store.stopRecording()
 
+        try await waitUntil("stalled-source recording finalizes") {
+            store.recordings.first?.status == .finalized
+        }
+
         let recording = try XCTUnwrap(store.recordings.first)
-        XCTAssertEqual(recording.status, .interrupted)
-        XCTAssertNil(recording.fileURL)
-        XCTAssertNotNil(recording.recoveryFolderURL)
+        XCTAssertEqual(recording.status, .finalized)
+        XCTAssertNotNil(recording.fileURL)
+        XCTAssertNil(recording.recoveryFolderURL)
+        XCTAssertEqual(store.systemAudioState, .ready)
+        XCTAssertNil(store.notice)
     }
 
     @MainActor

@@ -181,7 +181,7 @@ final class WiretapStore {
     @ObservationIgnored private var activeSourceStartDates: [RecordingSource: Date] = [:]
     @ObservationIgnored private var activeCaptureFrameCounts: [RecordingSource: Int64] = [:]
     @ObservationIgnored private var activeCaptureProgressDates: [RecordingSource: Date] = [:]
-    @ObservationIgnored private var activeCaptureFailures: [RecordingSource: Error] = [:]
+    @ObservationIgnored private var activeCaptureStalledSources = Set<RecordingSource>()
     @ObservationIgnored private let captureStallThreshold: TimeInterval
     private(set) var pendingPlaybackProgress: [Recording.ID: Double] = [:]
 
@@ -751,7 +751,7 @@ final class WiretapStore {
         activeSourceStartDates = [:]
         activeCaptureFrameCounts = [:]
         activeCaptureProgressDates = [:]
-        activeCaptureFailures = [:]
+        activeCaptureStalledSources = []
     }
 
     private func syncPlaybackState() {
@@ -772,7 +772,7 @@ final class WiretapStore {
     private func resetCaptureHealthTracking(startedAt: Date, sources: Set<RecordingSource>) {
         activeCaptureFrameCounts = [:]
         activeCaptureProgressDates = [:]
-        activeCaptureFailures = [:]
+        activeCaptureStalledSources = []
 
         for source in sources {
             let frameCount = captureFrameCount(for: source)
@@ -817,29 +817,20 @@ final class WiretapStore {
             if currentFrameCount > previousFrameCount {
                 activeCaptureFrameCounts[source] = currentFrameCount
                 activeCaptureProgressDates[source] = now
-                activeCaptureFailures[source] = nil
-                if source == .systemAudio {
-                    systemAudioState = .ready
-                } else {
-                    microphoneState = .ready
-                }
+                activeCaptureStalledSources.remove(source)
+                setCaptureState(.ready, for: source)
                 continue
             }
 
             guard previousFrameCount > 0,
-                  activeCaptureFailures[source] == nil,
+                  !activeCaptureStalledSources.contains(source),
                   let lastProgressDate = activeCaptureProgressDates[source],
                   now.timeIntervalSince(lastProgressDate) >= captureStallThreshold
             else { continue }
 
             let failure = CaptureSourceFailure.stalled(source: source)
-            activeCaptureFailures[source] = failure
-
-            if source == .systemAudio {
-                systemAudioState = .unavailable
-            } else {
-                microphoneState = .unavailable
-            }
+            activeCaptureStalledSources.insert(source)
+            setCaptureState(.unavailable, for: source)
 
             notice = WiretapNotice(
                 title: "Capture Source Stalled",
@@ -857,6 +848,15 @@ final class WiretapStore {
         }
     }
 
+    private func setCaptureState(_ state: CaptureSourceState, for source: RecordingSource) {
+        switch source {
+        case .systemAudio:
+            systemAudioState = state
+        case .microphone:
+            microphoneState = state
+        }
+    }
+
     private func finishActiveRecording(
         reason: RecordingStopReason,
         finalization: RecordingFinalizationStrategy
@@ -871,7 +871,6 @@ final class WiretapStore {
         let captureSources = activeCaptureSources
         let sourceStartDates = activeSourceStartDates
         let captureWriteError = microphoneResult.writeError ?? systemAudioResult.writeError
-        let captureHealthError = activeCaptureFailures.values.first
         let capturedSources = capturedSources(
             captureSources: captureSources,
             microphoneResult: microphoneResult,
@@ -886,6 +885,13 @@ final class WiretapStore {
             microphoneResult: microphoneResult,
             systemAudioResult: systemAudioResult
         )
+
+        for source in capturedSources {
+            setCaptureState(.ready, for: source)
+        }
+        if let missingCaptureSource {
+            setCaptureState(.unavailable, for: missingCaptureSource)
+        }
 
         guard let id = activeRecordingID,
               let finalURL = activeFinalURL,
@@ -904,18 +910,6 @@ final class WiretapStore {
         let cleanupURLs = [systemAudioURL, microphoneURL]
         switch finalization {
         case .mixSources:
-            if let captureHealthError {
-                retainInterruptedSources(
-                    id: id,
-                    title: title,
-                    durationFallback: duration,
-                    cleanupURLs: cleanupURLs,
-                    reason: reason,
-                    error: captureHealthError
-                )
-                return
-            }
-
             if let captureWriteError {
                 retainInterruptedSources(
                     id: id,

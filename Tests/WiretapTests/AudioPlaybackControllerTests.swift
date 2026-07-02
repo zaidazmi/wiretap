@@ -1,4 +1,3 @@
-import AVFoundation
 import Foundation
 @testable import Wiretap
 import XCTest
@@ -26,15 +25,21 @@ final class AudioPlaybackControllerTests: XCTestCase {
     @MainActor
     func testToggleStartsPausesResumesAndStopsPlayback() throws {
         let fileURL = temporaryDirectory.appendingPathComponent("playback.m4a")
-        try writeTone(to: fileURL, duration: 1.0, frequency: 440)
+        try Data("audio".utf8).write(to: fileURL)
         let recording = makeRecording(fileURL: fileURL)
-        let controller = AudioPlaybackController()
+        let player = FakeAudioPlayer(duration: 1)
+        let controller = AudioPlaybackController(makePlayer: { url in
+            XCTAssertEqual(url, fileURL)
+            return player
+        })
 
         try controller.toggle(recording: recording)
 
         XCTAssertEqual(controller.recordingID, recording.id)
         XCTAssertTrue(controller.isPlaying)
         XCTAssertEqual(controller.duration, 1.0, accuracy: 0.15)
+        XCTAssertEqual(player.prepareToPlayCallCount, 1)
+        XCTAssertEqual(player.playCallCount, 1)
 
         controller.seek(to: 0.5)
 
@@ -44,10 +49,12 @@ final class AudioPlaybackControllerTests: XCTestCase {
 
         XCTAssertFalse(controller.isPlaying)
         XCTAssertEqual(controller.recordingID, recording.id)
+        XCTAssertEqual(player.pauseCallCount, 1)
 
         try controller.toggle(recording: recording)
 
         XCTAssertTrue(controller.isPlaying)
+        XCTAssertEqual(player.playCallCount, 2)
 
         controller.stop()
 
@@ -55,6 +62,7 @@ final class AudioPlaybackControllerTests: XCTestCase {
         XCTAssertFalse(controller.isPlaying)
         XCTAssertEqual(controller.currentTime, 0)
         XCTAssertEqual(controller.duration, 0)
+        XCTAssertEqual(player.stopCallCount, 1)
     }
 
     @MainActor
@@ -75,9 +83,11 @@ final class AudioPlaybackControllerTests: XCTestCase {
     @MainActor
     func testSeekClampsProgressToPlayableRange() throws {
         let fileURL = temporaryDirectory.appendingPathComponent("seek.m4a")
-        try writeTone(to: fileURL, duration: 1.0, frequency: 660)
+        try Data("audio".utf8).write(to: fileURL)
         let recording = makeRecording(fileURL: fileURL)
-        let controller = AudioPlaybackController()
+        let controller = AudioPlaybackController(makePlayer: { _ in
+            FakeAudioPlayer(duration: 1)
+        })
         try controller.toggle(recording: recording)
 
         controller.seek(to: -1)
@@ -87,6 +97,25 @@ final class AudioPlaybackControllerTests: XCTestCase {
         controller.seek(to: 2)
 
         XCTAssertEqual(controller.currentTime, controller.duration, accuracy: 0.05)
+    }
+
+    @MainActor
+    func testToggleThrowsWhenPlaybackCannotStart() throws {
+        let fileURL = temporaryDirectory.appendingPathComponent("unplayable.m4a")
+        try Data("audio".utf8).write(to: fileURL)
+        let recording = makeRecording(fileURL: fileURL)
+        let player = FakeAudioPlayer(duration: 1)
+        player.canPlay = false
+        let controller = AudioPlaybackController(makePlayer: { _ in player })
+
+        XCTAssertThrowsError(try controller.toggle(recording: recording)) { error in
+            guard case AudioPlaybackError.playbackCouldNotStart = error else {
+                XCTFail("Expected playback start error, got \(error)")
+                return
+            }
+        }
+        XCTAssertNil(controller.recordingID)
+        XCTAssertFalse(controller.isPlaying)
     }
 
     private func makeRecording(fileURL: URL) -> Recording {
@@ -103,47 +132,42 @@ final class AudioPlaybackControllerTests: XCTestCase {
         )
     }
 
-    private func writeTone(
-        to url: URL,
-        duration: TimeInterval,
-        frequency: Double
-    ) throws {
-        let sampleRate = 48_000.0
-        let channelCount: AVAudioChannelCount = 2
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: channelCount,
-            interleaved: false
-        ) else {
-            XCTFail("Could not create test audio format")
-            return
-        }
+}
 
-        let frameCount = AVAudioFrameCount(sampleRate * duration)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
-              let channels = buffer.floatChannelData
-        else {
-            XCTFail("Could not create test audio buffer")
-            return
-        }
+@MainActor
+private final class FakeAudioPlayer: AudioPlaying {
+    var isPlaying = false
+    var currentTime: TimeInterval = 0
+    let duration: TimeInterval
+    var canPlay = true
+    var prepareToPlayCallCount = 0
+    var playCallCount = 0
+    var pauseCallCount = 0
+    var stopCallCount = 0
 
-        buffer.frameLength = frameCount
+    init(duration: TimeInterval) {
+        self.duration = duration
+    }
 
-        for frame in 0..<Int(frameCount) {
-            let sample = Float(sin(2 * Double.pi * frequency * Double(frame) / sampleRate) * 0.2)
-            for channel in 0..<Int(channelCount) {
-                channels[channel][frame] = sample
-            }
-        }
+    func prepareToPlay() -> Bool {
+        prepareToPlayCallCount += 1
+        return true
+    }
 
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: Int(channelCount),
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-        let file = try AVAudioFile(forWriting: url, settings: settings)
-        try file.write(from: buffer)
+    func play() -> Bool {
+        playCallCount += 1
+        isPlaying = canPlay
+        return canPlay
+    }
+
+    func pause() {
+        pauseCallCount += 1
+        isPlaying = false
+    }
+
+    func stop() {
+        stopCallCount += 1
+        isPlaying = false
+        currentTime = 0
     }
 }

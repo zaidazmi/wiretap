@@ -14,9 +14,41 @@ protocol AudioPlaybackControlling: AnyObject {
 }
 
 @MainActor
+protocol AudioPlaying: AnyObject {
+    var isPlaying: Bool { get }
+    var currentTime: TimeInterval { get set }
+    var duration: TimeInterval { get }
+
+    func prepareToPlay() -> Bool
+    func play() -> Bool
+    func pause()
+    func stop()
+}
+
+extension AVAudioPlayer: AudioPlaying {}
+
+enum AudioPlaybackError: LocalizedError {
+    case playbackCouldNotStart
+
+    var errorDescription: String? {
+        switch self {
+        case .playbackCouldNotStart:
+            "Wiretap could not start playback for this recording."
+        }
+    }
+}
+
+@MainActor
 final class AudioPlaybackController: AudioPlaybackControlling {
-    private var player: AVAudioPlayer?
+    private let makePlayer: (URL) throws -> any AudioPlaying
+    private var player: (any AudioPlaying)?
     private(set) var recordingID: Recording.ID?
+
+    init(makePlayer: @escaping (URL) throws -> any AudioPlaying = { url in
+        try AVAudioPlayer(contentsOf: url)
+    }) {
+        self.makePlayer = makePlayer
+    }
 
     var isPlaying: Bool {
         player?.isPlaying == true
@@ -44,14 +76,14 @@ final class AudioPlaybackController: AudioPlaybackControlling {
                 if player.currentTime >= player.duration {
                     player.currentTime = 0
                 }
-                player.play()
+                try start(player)
             }
             return
         }
 
-        let player = try AVAudioPlayer(contentsOf: fileURL)
-        player.prepareToPlay()
-        player.play()
+        let player = try makePlayer(fileURL)
+        _ = player.prepareToPlay()
+        try start(player)
 
         self.player = player
         self.recordingID = recording.id
@@ -66,5 +98,11 @@ final class AudioPlaybackController: AudioPlaybackControlling {
         player?.stop()
         player = nil
         recordingID = nil
+    }
+
+    private func start(_ player: any AudioPlaying) throws {
+        guard player.play() else {
+            throw AudioPlaybackError.playbackCouldNotStart
+        }
     }
 }

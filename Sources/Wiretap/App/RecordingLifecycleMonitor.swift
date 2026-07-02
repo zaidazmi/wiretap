@@ -27,14 +27,14 @@ final class RecordingLifecycleMonitor {
             NSWorkspace.willSleepNotification,
             center: workspaceNotificationCenter
         ) { [weak store] in
-            store?.interruptRecording(reason: .systemSleep)
+            store?.preserveInterruptedRecording(reason: .systemSleep)
         }
 
         observe(
             NSWorkspace.sessionDidResignActiveNotification,
             center: workspaceNotificationCenter
         ) { [weak store] in
-            store?.interruptRecording(reason: .sessionInactive)
+            store?.preserveInterruptedRecording(reason: .sessionInactive)
         }
 
         audioDeviceChangeMonitor.start { [weak store] in

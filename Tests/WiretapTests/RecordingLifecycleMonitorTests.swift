@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import Wiretap
 import XCTest
@@ -24,8 +25,84 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
 
     @MainActor
     func testAudioDeviceChangePreservesActiveRecording() throws {
-        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let audioDeviceMonitor = FakeAudioDeviceChangeMonitor()
+        var context = makeLifecycleContext(audioDeviceMonitor: audioDeviceMonitor)
+
+        context.store.startRecording()
+        audioDeviceMonitor.triggerChange()
+
+        try assertInterruptedRecording(
+            in: context.store,
+            sourceSummary: "Interrupted - source files retained after audio device change",
+            noticeText: "default audio device changed"
+        )
+        XCTAssertNotNil(context.lifecycleMonitor)
+        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 1)
+        XCTAssertEqual(context.systemAudioTap.stopCallCount, 1)
+
+        context.lifecycleMonitor = nil
+
+        XCTAssertEqual(audioDeviceMonitor.stopCallCount, 1)
+    }
+
+    @MainActor
+    func testApplicationTerminationPreservesActiveRecording() throws {
+        let notificationCenter = NotificationCenter()
+        let context = makeLifecycleContext(notificationCenter: notificationCenter)
+
+        context.store.startRecording()
+        notificationCenter.post(name: NSApplication.willTerminateNotification, object: nil)
+
+        try assertInterruptedRecording(
+            in: context.store,
+            sourceSummary: "Interrupted - source files retained before quit",
+            noticeText: "quit while a recording was in progress"
+        )
+        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 1)
+        XCTAssertEqual(context.systemAudioTap.stopCallCount, 1)
+    }
+
+    @MainActor
+    func testSystemSleepPreservesActiveRecordingSynchronously() throws {
+        let workspaceNotificationCenter = NotificationCenter()
+        let context = makeLifecycleContext(workspaceNotificationCenter: workspaceNotificationCenter)
+
+        context.store.startRecording()
+        workspaceNotificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+
+        try assertInterruptedRecording(
+            in: context.store,
+            sourceSummary: "Interrupted - source files retained before sleep",
+            noticeText: "Mac was going to sleep"
+        )
+        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 1)
+        XCTAssertEqual(context.systemAudioTap.stopCallCount, 1)
+    }
+
+    @MainActor
+    func testSessionInactivePreservesActiveRecordingSynchronously() throws {
+        let workspaceNotificationCenter = NotificationCenter()
+        let context = makeLifecycleContext(workspaceNotificationCenter: workspaceNotificationCenter)
+
+        context.store.startRecording()
+        workspaceNotificationCenter.post(name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
+
+        try assertInterruptedRecording(
+            in: context.store,
+            sourceSummary: "Interrupted - source files retained after session change",
+            noticeText: "active macOS session changed"
+        )
+        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 1)
+        XCTAssertEqual(context.systemAudioTap.stopCallCount, 1)
+    }
+
+    @MainActor
+    private func makeLifecycleContext(
+        notificationCenter: NotificationCenter = NotificationCenter(),
+        workspaceNotificationCenter: NotificationCenter = NotificationCenter(),
+        audioDeviceMonitor: FakeAudioDeviceChangeMonitor = FakeAudioDeviceChangeMonitor()
+    ) -> LifecycleContext {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let microphoneRecorder = MonitorFakeMicrophoneRecorder()
         let systemAudioTap = MonitorFakeSystemAudioTap()
         let store = WiretapStore(
@@ -35,32 +112,43 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
             permissionManager: PermissionManager(currentState: { .ready }),
             minimumFreeDiskSpaceBytes: 0
         )
-        var lifecycleMonitor: RecordingLifecycleMonitor? = RecordingLifecycleMonitor(
+        let lifecycleMonitor = RecordingLifecycleMonitor(
             store: store,
-            notificationCenter: NotificationCenter(),
-            workspaceNotificationCenter: NotificationCenter(),
+            notificationCenter: notificationCenter,
+            workspaceNotificationCenter: workspaceNotificationCenter,
             audioDeviceChangeMonitor: audioDeviceMonitor
         )
 
-        store.startRecording()
-        audioDeviceMonitor.triggerChange()
+        return LifecycleContext(
+            store: store,
+            lifecycleMonitor: lifecycleMonitor,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap
+        )
+    }
 
+    @MainActor
+    private func assertInterruptedRecording(
+        in store: WiretapStore,
+        sourceSummary: String,
+        noticeText: String
+    ) throws {
         let recording = try XCTUnwrap(store.recordings.first)
-        XCTAssertNotNil(lifecycleMonitor)
         XCTAssertFalse(store.isRecording)
         XCTAssertEqual(recording.status, .interrupted)
         XCTAssertNil(recording.fileURL)
         XCTAssertNotNil(recording.recoveryFolderURL)
-        XCTAssertEqual(recording.sourceSummary, "Interrupted - source files retained after audio device change")
+        XCTAssertEqual(recording.sourceSummary, sourceSummary)
         XCTAssertEqual(store.notice?.title, "Recording Interrupted")
-        XCTAssertTrue(store.notice?.message.localizedStandardContains("default audio device changed") == true)
-        XCTAssertEqual(microphoneRecorder.stopCallCount, 1)
-        XCTAssertEqual(systemAudioTap.stopCallCount, 1)
-
-        lifecycleMonitor = nil
-
-        XCTAssertEqual(audioDeviceMonitor.stopCallCount, 1)
+        XCTAssertTrue(store.notice?.message.localizedStandardContains(noticeText) == true)
     }
+}
+
+private struct LifecycleContext {
+    let store: WiretapStore
+    var lifecycleMonitor: RecordingLifecycleMonitor?
+    let microphoneRecorder: MonitorFakeMicrophoneRecorder
+    let systemAudioTap: MonitorFakeSystemAudioTap
 }
 
 private final class FakeAudioDeviceChangeMonitor: AudioDeviceChangeMonitoring {

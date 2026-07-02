@@ -33,6 +33,7 @@ struct LibraryView: View {
                     EmptyLibraryView(
                         isFiltering: !store.searchText.isEmpty,
                         canRecord: store.canRecord,
+                        captureMode: store.captureMode,
                         onRecord: { store.startRecording() },
                         onReviewPermissions: { store.isOnboardingPresented = true },
                         onClearSearch: { store.searchText = "" }

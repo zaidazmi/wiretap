@@ -72,6 +72,88 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSystemOnlyPermissionRequestSkipsMicrophonePrompt() async {
+        let microphoneRequest = MutablePermissionRequest(result: .denied)
+        let store = WiretapStore(
+            permissionManager: PermissionManager(
+                currentState: { .denied },
+                requestMicrophoneAccess: { await microphoneRequest.request() }
+            ),
+            captureMode: .systemOnly,
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.isOnboardingPresented = true
+
+        let shouldDismiss = await store.requestPermissions()
+
+        XCTAssertEqual(microphoneRequest.callCount, 0)
+        XCTAssertTrue(shouldDismiss)
+        XCTAssertFalse(store.isOnboardingPresented)
+        XCTAssertNil(store.notice)
+        XCTAssertEqual(store.onboardingRecovery, nil)
+    }
+
+    @MainActor
+    func testMicrophonePermissionDenialKeepsOnboardingPresented() async {
+        let microphoneRequest = MutablePermissionRequest(result: .denied)
+        let store = WiretapStore(
+            permissionManager: PermissionManager(
+                currentState: { .notReviewed },
+                requestMicrophoneAccess: { await microphoneRequest.request() }
+            ),
+            captureMode: .systemAndMicrophone,
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.isOnboardingPresented = true
+
+        let shouldDismiss = await store.requestPermissions()
+
+        XCTAssertEqual(microphoneRequest.callCount, 1)
+        XCTAssertFalse(shouldDismiss)
+        XCTAssertTrue(store.isOnboardingPresented)
+        XCTAssertEqual(store.onboardingRecovery, .microphoneSettings)
+        XCTAssertEqual(store.notice?.recovery, .microphoneSettings)
+    }
+
+    @MainActor
+    func testSystemAudioRecoveryKeepsOnboardingPresentedWhenRequired() async {
+        let microphoneRequest = MutablePermissionRequest(result: .ready)
+        let store = WiretapStore(
+            permissionManager: PermissionManager(
+                currentState: { .ready },
+                requestMicrophoneAccess: { await microphoneRequest.request() }
+            ),
+            captureMode: .systemOnly,
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.systemAudioState = .unavailable
+        store.isOnboardingPresented = true
+
+        let shouldDismiss = await store.requestPermissions()
+
+        XCTAssertEqual(microphoneRequest.callCount, 0)
+        XCTAssertFalse(shouldDismiss)
+        XCTAssertTrue(store.isOnboardingPresented)
+        XCTAssertEqual(store.onboardingRecovery, .systemAudioSettings)
+    }
+
+    @MainActor
+    func testReadyMicrophoneSummaryDoesNotClaimSystemAudioAlreadyAvailable() {
+        let store = WiretapStore(
+            permissionManager: PermissionManager(currentState: { .ready }),
+            captureMode: .systemAndMicrophone,
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.permissionState = .ready
+        store.systemAudioState = .notChecked
+
+        XCTAssertEqual(
+            store.capturePermissionSummary,
+            "Microphone access is ready. macOS checks Audio Capture permission when recording starts."
+        )
+    }
+
+    @MainActor
     func testLoadLibraryPersistsMissingFileRepair() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let missingURL = try repository.recordingURL(for: UUID())
@@ -1142,6 +1224,20 @@ private final class MutablePermissionState: @unchecked Sendable {
 
     init(_ value: PermissionState) {
         self.value = value
+    }
+}
+
+private final class MutablePermissionRequest: @unchecked Sendable {
+    private(set) var callCount = 0
+    var result: PermissionState
+
+    init(result: PermissionState) {
+        self.result = result
+    }
+
+    func request() async -> PermissionState {
+        callCount += 1
+        return result
     }
 }
 

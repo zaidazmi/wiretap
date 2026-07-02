@@ -31,6 +31,28 @@ enum RecordingCaptureMode: String, CaseIterable, Identifiable, Hashable, Sendabl
         }
     }
 
+    var onboardingSubtitle: String {
+        switch self {
+        case .systemAndMicrophone:
+            return "System output audio and the default microphone."
+        case .systemOnly:
+            return "System output audio, without microphone input."
+        case .microphoneOnly:
+            return "Default microphone, without system output audio."
+        }
+    }
+
+    var emptyLibraryDescription: String {
+        switch self {
+        case .systemAndMicrophone:
+            return "Start a local recording when you are ready to capture system audio and the default microphone."
+        case .systemOnly:
+            return "Start a local recording when you are ready to capture audio playing on this Mac."
+        case .microphoneOnly:
+            return "Start a local recording when you are ready to capture the default microphone."
+        }
+    }
+
     var sources: Set<RecordingSource> {
         switch self {
         case .systemAndMicrophone:

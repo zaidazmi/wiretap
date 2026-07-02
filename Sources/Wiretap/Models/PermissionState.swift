@@ -16,11 +16,11 @@ enum PermissionState: Hashable {
     var summary: String {
         switch self {
         case .notReviewed:
-            "Wiretap records system output audio and the current default microphone."
+            "Wiretap can record system output audio and the current default microphone."
         case .ready:
-            "System audio and microphone access are available."
+            "Microphone access is ready. System audio permission is checked when recording starts."
         case .denied:
-            "Open System Settings to allow audio capture and microphone access."
+            "Open System Settings to allow microphone access. System audio may also require Audio Capture approval."
         }
     }
 }

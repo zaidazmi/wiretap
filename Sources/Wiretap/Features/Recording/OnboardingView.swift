@@ -14,28 +14,47 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Wiretap")
                         .font(.largeTitle.weight(.semibold))
-                    Text("System output audio and the default microphone.")
+                    Text(store.captureMode.onboardingSubtitle)
                         .foregroundStyle(.secondary)
                 }
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Capture Mode")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                CaptureModePicker(
+                    selection: $store.captureMode,
+                    isDisabled: store.isRecording,
+                    accessibilityIdentifier: WiretapAccessibility.Onboarding.captureModePicker
+                )
+                .frame(width: 320)
+            }
+
             VStack(alignment: .leading, spacing: 14) {
-                PermissionRow(
-                    title: "System Audio",
-                    summary: "Captures the audio playing on this Mac, including headphone playback.",
-                    systemImage: "speaker.wave.3.fill",
-                    state: store.systemAudioState,
-                    rowIdentifier: WiretapAccessibility.Onboarding.systemAudioRow,
-                    statusIdentifier: WiretapAccessibility.Onboarding.systemAudioStatus
-                )
-                PermissionRow(
-                    title: "Microphone",
-                    summary: "Uses the current macOS default input device.",
-                    systemImage: "mic.fill",
-                    state: store.microphoneState,
-                    rowIdentifier: WiretapAccessibility.Onboarding.microphoneRow,
-                    statusIdentifier: WiretapAccessibility.Onboarding.microphoneStatus
-                )
+                if store.captureMode.requiresSystemAudio {
+                    PermissionRow(
+                        title: "System Audio",
+                        summary: "Captures the audio playing on this Mac. macOS checks Audio Capture permission when recording starts.",
+                        systemImage: "speaker.wave.3.fill",
+                        state: store.systemAudioState,
+                        rowIdentifier: WiretapAccessibility.Onboarding.systemAudioRow,
+                        statusIdentifier: WiretapAccessibility.Onboarding.systemAudioStatus
+                    )
+                }
+
+                if store.captureMode.requiresMicrophone {
+                    PermissionRow(
+                        title: "Microphone",
+                        summary: "Uses the current macOS default input device.",
+                        systemImage: "mic.fill",
+                        state: store.microphoneState,
+                        rowIdentifier: WiretapAccessibility.Onboarding.microphoneRow,
+                        statusIdentifier: WiretapAccessibility.Onboarding.microphoneStatus
+                    )
+                }
+
                 PermissionRow(
                     title: "Local Files",
                     summary: "Saves mixed AAC .m4a recordings in the app library.",
@@ -70,20 +89,17 @@ struct OnboardingView: View {
 
                 Button("Continue") {
                     Task {
-                        await store.requestPermissions()
-                        dismiss()
+                        if await store.requestPermissions() {
+                            dismiss()
+                        }
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier(WiretapAccessibility.Onboarding.continueButton)
 
-                if store.permissionState == .denied || store.systemAudioState == .unavailable {
+                if let recovery = store.onboardingRecovery {
                     Button("Open Settings") {
-                        if store.systemAudioState == .unavailable {
-                            store.openSettings(for: .systemAudioSettings)
-                        } else {
-                            store.openPermissionSettings()
-                        }
+                        store.openSettings(for: recovery)
                         dismiss()
                     }
                     .accessibilityIdentifier(WiretapAccessibility.Onboarding.openSettingsButton)

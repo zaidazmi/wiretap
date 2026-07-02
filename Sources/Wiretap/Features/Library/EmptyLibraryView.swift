@@ -3,6 +3,7 @@ import SwiftUI
 struct EmptyLibraryView: View {
     let isFiltering: Bool
     let canRecord: Bool
+    let captureMode: RecordingCaptureMode
     let onRecord: () -> Void
     let onReviewPermissions: () -> Void
     let onClearSearch: () -> Void
@@ -54,7 +55,7 @@ struct EmptyLibraryView: View {
     private var description: String {
         isFiltering
             ? "Try a different search or clear the current filter."
-            : "Start a local recording when you are ready to capture system audio and the default microphone."
+            : captureMode.emptyLibraryDescription
     }
 }
 
@@ -62,6 +63,7 @@ struct EmptyLibraryView: View {
     EmptyLibraryView(
         isFiltering: false,
         canRecord: true,
+        captureMode: .systemAndMicrophone,
         onRecord: {},
         onReviewPermissions: {},
         onClearSearch: {}

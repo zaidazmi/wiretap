@@ -66,6 +66,7 @@ enum WiretapAccessibility {
 
     enum Onboarding {
         static let root = "wiretap.onboarding.root"
+        static let captureModePicker = "wiretap.onboarding.captureMode"
         static let systemAudioRow = "wiretap.onboarding.systemAudio"
         static let microphoneRow = "wiretap.onboarding.microphone"
         static let localFilesRow = "wiretap.onboarding.localFiles"

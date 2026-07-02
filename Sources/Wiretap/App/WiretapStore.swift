@@ -272,27 +272,67 @@ final class WiretapStore {
     }
 
     var capturePermissionTitle: String {
-        if !captureMode.requiresMicrophone {
-            return systemAudioState == .unavailable ? "System Audio Needs Review" : "System Audio Selected"
-        }
-
-        if systemAudioState == .unavailable, permissionState == .ready {
+        if captureMode.requiresSystemAudio, systemAudioState == .unavailable {
             return "System Audio Needs Review"
         }
 
-        return permissionState.title
+        if captureMode.requiresMicrophone, permissionState == .denied {
+            return "Microphone Access Needed"
+        }
+
+        switch captureMode {
+        case .systemAndMicrophone:
+            return permissionState == .ready ? "Microphone Ready" : permissionState.title
+        case .systemOnly:
+            return "System Audio Selected"
+        case .microphoneOnly:
+            return permissionState == .ready ? "Microphone Ready" : permissionState.title
+        }
     }
 
     var capturePermissionSummary: String {
-        if !captureMode.requiresMicrophone {
-            return "System audio capture uses macOS Audio Capture permission."
+        switch captureMode {
+        case .systemOnly:
+            if systemAudioState == .unavailable {
+                return "Open Privacy & Security to allow Audio Capture, then retry recording."
+            }
+
+            return "Microphone access is not required. macOS checks Audio Capture permission when recording starts."
+        case .microphoneOnly:
+            switch permissionState {
+            case .notReviewed:
+                return "Wiretap uses the current macOS default input device."
+            case .ready:
+                return "Microphone access is ready for the current default input device."
+            case .denied:
+                return "Open System Settings to allow microphone access before recording."
+            }
+        case .systemAndMicrophone:
+            if systemAudioState == .unavailable, permissionState == .ready {
+                return "Microphone access is ready. System audio capture needs Settings review."
+            }
+
+            switch permissionState {
+            case .notReviewed:
+                return "Wiretap records system output audio and the current default microphone."
+            case .ready:
+                return "Microphone access is ready. macOS checks Audio Capture permission when recording starts."
+            case .denied:
+                return "Open System Settings to allow microphone access. Audio Capture may also require approval."
+            }
+        }
+    }
+
+    var onboardingRecovery: WiretapNoticeRecovery? {
+        if captureMode.requiresSystemAudio, systemAudioState == .unavailable {
+            return .systemAudioSettings
         }
 
-        if systemAudioState == .unavailable, permissionState == .ready {
-            return "Microphone access is ready. System audio capture needs Settings review."
+        if captureMode.requiresMicrophone, permissionState == .denied {
+            return .microphoneSettings
         }
 
-        return permissionState.summary
+        return nil
     }
 
     var canRecord: Bool {
@@ -624,18 +664,29 @@ final class WiretapStore {
         isOnboardingPresented = false
     }
 
-    func requestPermissions() async {
-        permissionState = await permissionManager.requestMicrophoneAccess()
-        microphoneState = microphoneCaptureState(for: permissionState)
-        isOnboardingPresented = false
+    @discardableResult
+    func requestPermissions() async -> Bool {
+        if captureMode.requiresMicrophone {
+            permissionState = await permissionManager.requestMicrophoneAccess()
+            microphoneState = microphoneCaptureState(for: permissionState)
+        } else {
+            permissionState = permissionManager.currentState()
+            microphoneState = microphoneCaptureState(for: permissionState)
+        }
 
-        if permissionState == .denied {
+        if captureMode.requiresMicrophone, permissionState == .denied {
             notice = WiretapNotice(
                 title: "Microphone Access Denied",
                 message: "Open System Settings to allow microphone access before recording.",
                 recovery: .microphoneSettings
             )
+        } else if notice?.recovery == .microphoneSettings {
+            notice = nil
         }
+
+        let shouldDismiss = onboardingRecovery == nil
+        isOnboardingPresented = !shouldDismiss
+        return shouldDismiss
     }
 
     func openPermissionSettings() {

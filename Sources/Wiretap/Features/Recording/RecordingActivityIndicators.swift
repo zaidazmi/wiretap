@@ -72,33 +72,3 @@ struct LiveWaveformMeter: View {
         0.58 + (Double(index % 4) * 0.08)
     }
 }
-
-struct CaptureSourcePill: View {
-    let source: RecordingSource
-
-    var body: some View {
-        Label(source.label.capitalized, systemImage: systemImage)
-            .font(.caption.weight(.semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .foregroundStyle(.primary)
-            .background(
-                Color(nsColor: .controlBackgroundColor).opacity(0.72),
-                in: Capsule(style: .continuous)
-            )
-            .overlay {
-                Capsule(style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-            }
-    }
-
-    private var systemImage: String {
-        switch source {
-        case .systemAudio:
-            return "speaker.wave.2.fill"
-        case .microphone:
-            return "mic.fill"
-        }
-    }
-}

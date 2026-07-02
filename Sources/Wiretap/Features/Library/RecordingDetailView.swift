@@ -10,13 +10,7 @@ struct RecordingDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     detailHeader
-                    if recording.status == .recording {
-                        ActiveRecordingSurface(
-                            recording: recording,
-                            elapsedText: store.elapsedText,
-                            onStop: { store.stopRecording() }
-                        )
-                    } else {
+                    if recording.status != .recording {
                         PlayerSurface(recording: recording, store: store)
                     }
                     detailSections
@@ -147,126 +141,6 @@ struct RecordingDetailView: View {
                 }
             }
         }
-    }
-}
-
-private struct ActiveRecordingSurface: View {
-    let recording: Recording
-    let elapsedText: String
-    let onStop: () -> Void
-
-    private var sources: [RecordingSource] {
-        RecordingSource.allCases.filter { source in
-            recording.sourceSummary.localizedStandardContains(source.label)
-        }
-    }
-
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            horizontalLayout
-            compactLayout
-        }
-        .padding(22)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.red.opacity(0.15),
-                            Color.red.opacity(0.06),
-                            Color(nsColor: .controlBackgroundColor)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.red.opacity(0.22), lineWidth: 1)
-        }
-        .accessibilityIdentifier(WiretapAccessibility.Detail.activeRecording)
-    }
-
-    private var horizontalLayout: some View {
-        HStack(alignment: .center, spacing: 22) {
-            LiveRecordingGlyph(size: 74)
-
-            VStack(alignment: .leading, spacing: 14) {
-                activeHeader
-                sourcePills
-                LiveWaveformMeter(color: .red, barCount: 22)
-                    .frame(maxWidth: 260, alignment: .leading)
-            }
-
-            Spacer(minLength: 24)
-
-            VStack(alignment: .trailing, spacing: 14) {
-                elapsedBlock
-                stopButton
-            }
-        }
-    }
-
-    private var compactLayout: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 14) {
-                LiveRecordingGlyph(size: 58)
-                activeHeader
-                Spacer()
-            }
-
-            LiveWaveformMeter(color: .red, barCount: 18)
-            sourcePills
-
-            HStack(alignment: .center) {
-                elapsedBlock
-                Spacer()
-                stopButton
-            }
-        }
-    }
-
-    private var activeHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Live capture")
-                .font(.title3.weight(.semibold))
-            Text(recording.sourceSummary)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-    }
-
-    private var sourcePills: some View {
-        HStack(spacing: 8) {
-            ForEach(sources, id: \.self) { source in
-                CaptureSourcePill(source: source)
-            }
-        }
-    }
-
-    private var elapsedBlock: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text("Elapsed")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(elapsedText)
-                .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                .monospacedDigit()
-                .lineLimit(1)
-        }
-    }
-
-    private var stopButton: some View {
-        Button(action: onStop) {
-            Label("Stop Recording", systemImage: "stop.fill")
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .tint(.red)
-        .accessibilityIdentifier(WiretapAccessibility.Detail.activeStopButton)
     }
 }
 

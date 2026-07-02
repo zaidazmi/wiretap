@@ -44,8 +44,6 @@ enum WiretapAccessibility {
     enum Detail {
         static let root = "wiretap.detail.root"
         static let titleField = "wiretap.detail.title"
-        static let activeRecording = "wiretap.detail.activeRecording"
-        static let activeStopButton = "wiretap.detail.activeRecording.stop"
         static let player = "wiretap.detail.player"
         static let playPauseButton = "wiretap.detail.player.playPause"
         static let seekSlider = "wiretap.detail.player.seek"

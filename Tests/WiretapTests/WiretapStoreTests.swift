@@ -24,6 +24,54 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testStoreLoadsPersistedCaptureMode() {
+        var storedValue: String? = RecordingCaptureMode.systemOnly.rawValue
+        let storage = CaptureModeStorage(
+            readValue: { storedValue },
+            writeValue: { storedValue = $0 }
+        )
+
+        let store = WiretapStore(
+            captureModeStorage: storage,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        XCTAssertEqual(store.captureMode, .systemOnly)
+    }
+
+    @MainActor
+    func testStorePersistsCaptureModeChanges() {
+        var storedValue: String?
+        let storage = CaptureModeStorage(
+            readValue: { storedValue },
+            writeValue: { storedValue = $0 }
+        )
+        let store = WiretapStore(
+            captureModeStorage: storage,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.captureMode = .microphoneOnly
+
+        XCTAssertEqual(storedValue, RecordingCaptureMode.microphoneOnly.rawValue)
+    }
+
+    @MainActor
+    func testStoreDefaultsInvalidPersistedCaptureMode() {
+        let storage = CaptureModeStorage(
+            readValue: { "not-a-real-mode" },
+            writeValue: { _ in }
+        )
+
+        let store = WiretapStore(
+            captureModeStorage: storage,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        XCTAssertEqual(store.captureMode, .systemAndMicrophone)
+    }
+
+    @MainActor
     func testLoadLibraryPersistsMissingFileRepair() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let missingURL = try repository.recordingURL(for: UUID())

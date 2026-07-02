@@ -156,7 +156,12 @@ final class WiretapStore {
     var playbackDuration: TimeInterval = 0
     var systemAudioState: CaptureSourceState = .notChecked
     var microphoneState: CaptureSourceState = .notChecked
-    var captureMode: RecordingCaptureMode = .systemAndMicrophone
+    var captureMode: RecordingCaptureMode {
+        didSet {
+            guard captureMode != oldValue else { return }
+            captureModeStorage?.save(captureMode)
+        }
+    }
 
     @ObservationIgnored private let repository: RecordingLibraryRepository
     @ObservationIgnored private let microphoneRecorder: any MicrophoneRecording
@@ -165,6 +170,7 @@ final class WiretapStore {
     @ObservationIgnored private let mixerWriter: AudioMixerWriter
     @ObservationIgnored private let permissionManager: PermissionManager
     @ObservationIgnored private let fileActions: RecordingFileActions
+    @ObservationIgnored private let captureModeStorage: CaptureModeStorage?
     @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
     @ObservationIgnored private let logger = WiretapLog.capture
     @ObservationIgnored private var activeRecordingID: Recording.ID?
@@ -188,11 +194,14 @@ final class WiretapStore {
         mixerWriter: AudioMixerWriter = AudioMixerWriter(),
         permissionManager: PermissionManager = PermissionManager(),
         fileActions: RecordingFileActions = .live,
+        captureMode: RecordingCaptureMode = .systemAndMicrophone,
+        captureModeStorage: CaptureModeStorage? = nil,
         minimumFreeDiskSpaceBytes: Int64 = 1_000_000_000,
         captureStallThreshold: TimeInterval = 12
     ) {
         self.recordings = recordings
         self.selectedRecordingID = recordings.first?.id
+        self.captureMode = captureModeStorage?.load() ?? captureMode
         self.repository = repository
         self.microphoneRecorder = microphoneRecorder
         self.playbackController = playbackController
@@ -200,6 +209,7 @@ final class WiretapStore {
         self.mixerWriter = mixerWriter
         self.permissionManager = permissionManager
         self.fileActions = fileActions
+        self.captureModeStorage = captureModeStorage
         self.minimumFreeDiskSpaceBytes = minimumFreeDiskSpaceBytes
         self.captureStallThreshold = captureStallThreshold
     }
@@ -1217,7 +1227,7 @@ private extension WiretapStore {
 
 extension WiretapStore {
     static func live() -> WiretapStore {
-        let store = WiretapStore()
+        let store = WiretapStore(captureModeStorage: CaptureModeStorage())
         store.loadLibrary()
         return store
     }

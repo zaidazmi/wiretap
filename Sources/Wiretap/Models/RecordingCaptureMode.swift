@@ -1,6 +1,6 @@
 import Foundation
 
-enum RecordingCaptureMode: String, CaseIterable, Identifiable, Hashable {
+enum RecordingCaptureMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     case systemAndMicrophone
     case systemOnly
     case microphoneOnly

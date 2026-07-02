@@ -80,8 +80,6 @@ struct AudioMixerWriter {
         let engine = AVAudioEngine()
         let playerNodes = try renderInputs.map { input in
             let playerNode = AVAudioPlayerNode()
-            let varispeedNode = AVAudioUnitVarispeed()
-            varispeedNode.rate = input.playbackRate
 
             let file = try AVAudioFile(forReading: input.input.input.url)
             let startFrame = AVAudioFramePosition(round(input.input.input.startOffset * outputSampleRate))
@@ -89,9 +87,7 @@ struct AudioMixerWriter {
                 ? AVAudioTime(sampleTime: startFrame, atRate: outputSampleRate)
                 : nil
             engine.attach(playerNode)
-            engine.attach(varispeedNode)
-            engine.connect(playerNode, to: varispeedNode, format: file.processingFormat)
-            engine.connect(varispeedNode, to: engine.mainMixerNode, format: file.processingFormat)
+            engine.connect(playerNode, to: engine.mainMixerNode, format: file.processingFormat)
             playerNode.scheduleFile(file, at: startTime)
             return playerNode
         }
@@ -211,7 +207,6 @@ private struct UsableAudioInput {
 private struct RenderAudioInput {
     var input: UsableAudioInput
     var outputDuration: TimeInterval
-    var playbackRate: Float
 
     init(input: UsableAudioInput) {
         self.input = input
@@ -221,11 +216,8 @@ private struct RenderAudioInput {
             guard duration.isFinite, duration > 0 else { return nil }
             return duration
         }
-        let unclampedRate = input.duration / (usableTargetDuration ?? input.duration)
-        let clampedRate = min(4, max(0.25, unclampedRate))
 
-        playbackRate = Float(clampedRate)
-        outputDuration = input.duration / clampedRate
+        outputDuration = max(input.duration, usableTargetDuration ?? input.duration)
     }
 }
 

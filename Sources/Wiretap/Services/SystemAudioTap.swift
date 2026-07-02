@@ -31,13 +31,22 @@ final class SystemAudioTap: SystemAudioTapping {
 
         do {
             let excludedProcesses = try currentProcessExclusionList()
+            let outputDeviceUID = try defaultOutputDeviceUID()
             let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: excludedProcesses)
+            tapDescription.uuid = UUID()
             tapDescription.name = "Wiretap System Audio"
             tapDescription.isPrivate = true
             tapDescription.muteBehavior = .unmuted
 
             guard let tap = try system.makeProcessTap(description: tapDescription) else {
                 throw SystemAudioTapError.tapCreationFailed
+            }
+            let tapUID: String
+            do {
+                tapUID = try tap.uid
+            } catch {
+                try? system.destroyProcessTap(tap)
+                throw error
             }
 
             var streamDescription = try tap.format
@@ -51,8 +60,14 @@ final class SystemAudioTap: SystemAudioTapping {
             let aggregateDescription: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "Wiretap System Audio Device",
                 kAudioAggregateDeviceUIDKey: "dev.zaidazmi.Wiretap.Aggregate.\(UUID().uuidString)",
+                kAudioAggregateDeviceMainSubDeviceKey: outputDeviceUID,
                 kAudioAggregateDeviceIsPrivateKey: true,
-                kAudioAggregateDeviceTapListKey: [[kAudioSubTapUIDKey: try tap.uid]],
+                kAudioAggregateDeviceIsStackedKey: false,
+                kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputDeviceUID]],
+                kAudioAggregateDeviceTapListKey: [[
+                    kAudioSubTapUIDKey: tapUID,
+                    kAudioSubTapDriftCompensationKey: true
+                ]],
                 kAudioAggregateDeviceTapAutoStartKey: true
             ]
 
@@ -127,6 +142,30 @@ final class SystemAudioTap: SystemAudioTapping {
         return []
     }
 
+    private func defaultOutputDeviceUID() throws -> String {
+        var outputDeviceID = AudioDeviceID(kAudioObjectUnknown)
+        var outputDeviceAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var outputDeviceSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let outputDeviceStatus = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &outputDeviceAddress,
+            0,
+            nil,
+            &outputDeviceSize,
+            &outputDeviceID
+        )
+
+        guard outputDeviceStatus == noErr, outputDeviceID != kAudioObjectUnknown else {
+            throw SystemAudioTapError.outputDeviceUnavailable
+        }
+
+        return try AudioHardwareDevice(id: outputDeviceID).uid
+    }
+
 }
 
 enum SystemAudioTapError: LocalizedError {
@@ -134,6 +173,7 @@ enum SystemAudioTapError: LocalizedError {
     case tapCreationFailed
     case aggregateCreationFailed
     case unsupportedFormat
+    case outputDeviceUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -145,6 +185,8 @@ enum SystemAudioTapError: LocalizedError {
             "Wiretap could not create the private aggregate device for the system-audio tap."
         case .unsupportedFormat:
             "Wiretap could not read the system-audio tap format."
+        case .outputDeviceUnavailable:
+            "Wiretap could not find the default audio output device."
         }
     }
 

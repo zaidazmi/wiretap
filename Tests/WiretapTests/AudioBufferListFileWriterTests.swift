@@ -87,6 +87,32 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(result.droppedFrameCount, Int64(buffer.frameLength))
     }
 
+    func testInterleavedInputReportsExactCapturedFrameCount() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("interleaved-input.m4a")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: true
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.125)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        writer?.write(inputData: buffer.audioBufferList)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertEqual(result?.capturedFrameCount, Int64(buffer.frameLength))
+        XCTAssertEqual(result?.droppedFrameCount, 0)
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.125, accuracy: 0.05)
+    }
+
     func testOversizedInputReportsDroppedFramesWithoutAllocatingFallback() throws {
         let outputURL = temporaryDirectory.appendingPathComponent("oversized-drop.m4a")
         let format = try XCTUnwrap(AVAudioFormat(
@@ -174,13 +200,24 @@ final class AudioBufferListFileWriterTests: XCTestCase {
             pcmFormat: format,
             frameCapacity: frameCount
         ))
-        let channels = try XCTUnwrap(buffer.floatChannelData)
         buffer.frameLength = frameCount
 
-        for frame in 0..<Int(frameCount) {
-            let sample = Float(sin(2 * Double.pi * frequency * Double(frame) / format.sampleRate) * 0.25)
-            for channel in 0..<Int(format.channelCount) {
-                channels[channel][frame] = sample
+        if format.isInterleaved {
+            let audioBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+            let samples = try XCTUnwrap(audioBuffers.first?.mData?.assumingMemoryBound(to: Float.self))
+            for frame in 0..<Int(frameCount) {
+                let sample = Float(sin(2 * Double.pi * frequency * Double(frame) / format.sampleRate) * 0.25)
+                for channel in 0..<Int(format.channelCount) {
+                    samples[frame * Int(format.channelCount) + channel] = sample
+                }
+            }
+        } else {
+            let channels = try XCTUnwrap(buffer.floatChannelData)
+            for frame in 0..<Int(frameCount) {
+                let sample = Float(sin(2 * Double.pi * frequency * Double(frame) / format.sampleRate) * 0.25)
+                for channel in 0..<Int(format.channelCount) {
+                    channels[channel][frame] = sample
+                }
             }
         }
 

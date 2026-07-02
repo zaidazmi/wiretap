@@ -78,15 +78,13 @@ final class AudioBufferListFileWriter {
     }
 
     private func copiedBuffer(from inputData: UnsafePointer<AudioBufferList>) -> PendingAudioBufferResult? {
-        guard let firstBuffer = UnsafeMutableAudioBufferListPointer(
-            UnsafeMutablePointer(mutating: inputData)
-        ).first else { return nil }
+        guard let sourceBuffer = AVAudioPCMBuffer(
+            pcmFormat: inputFormat,
+            bufferListNoCopy: inputData,
+            deallocator: nil
+        ) else { return nil }
 
-        let streamDescription = inputFormat.streamDescription.pointee
-        guard streamDescription.mBytesPerFrame > 0 else { return nil }
-
-        let bytesPerFrame = Int(streamDescription.mBytesPerFrame)
-        let frameLength = AVAudioFrameCount(Int(firstBuffer.mDataByteSize) / bytesPerFrame)
+        let frameLength = sourceBuffer.frameLength
         guard frameLength > 0 else { return nil }
 
         guard frameLength <= bufferPool.frameCapacity else {
@@ -106,18 +104,17 @@ final class AudioBufferListFileWriter {
             ))
         }
 
-        copy(inputData: inputData, frameLength: frameLength, into: pendingBuffer.buffer)
+        copy(sourceBuffer: sourceBuffer, into: pendingBuffer.buffer)
         return .success(pendingBuffer)
     }
 
     private func copy(
-        inputData: UnsafePointer<AudioBufferList>,
-        frameLength: AVAudioFrameCount,
+        sourceBuffer: AVAudioPCMBuffer,
         into copiedBuffer: AVAudioPCMBuffer
     ) {
-        copiedBuffer.frameLength = frameLength
+        copiedBuffer.frameLength = sourceBuffer.frameLength
         let sourceBuffers = UnsafeMutableAudioBufferListPointer(
-            UnsafeMutablePointer(mutating: inputData)
+            UnsafeMutablePointer(mutating: sourceBuffer.audioBufferList)
         )
         let destinationBuffers = UnsafeMutableAudioBufferListPointer(
             copiedBuffer.mutableAudioBufferList

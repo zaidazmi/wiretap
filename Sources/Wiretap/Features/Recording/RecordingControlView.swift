@@ -10,7 +10,7 @@ struct RecordingControlView: View {
     let style: RecordingControlStyle
 
     var body: some View {
-        if style == .menuBar {
+        if style == .menuBar || store.isRecording {
             controlButton
                 .buttonStyle(.borderedProminent)
         } else {
@@ -27,14 +27,14 @@ struct RecordingControlView: View {
                 .frame(maxWidth: style == .menuBar ? .infinity : nil)
         }
         .tint(store.isRecording ? .red : .accentColor)
-        .disabled(!store.canRecord)
+        .disabled(!store.isRecording && !store.canRecord)
         .help(buttonTitle)
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var buttonTitle: String {
         if store.isRecording {
-            return style == .menuBar ? "Stop \(store.elapsedText)" : "Stop"
+            return style == .menuBar ? "Stop \(store.elapsedText)" : "Stop Recording"
         }
 
         return "Record"
@@ -54,10 +54,13 @@ struct RecordingStatusBadge: View {
     let isRecording: Bool
 
     var body: some View {
-        Image(systemName: isRecording ? "record.circle.fill" : "checkmark.circle.fill")
-            .font(.system(size: 30, weight: .semibold))
-            .foregroundStyle(isRecording ? .red : .green)
-            .symbolEffect(.pulse, isActive: isRecording)
+        if isRecording {
+            LiveRecordingGlyph(size: 36)
+        } else {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 30, weight: .semibold))
+                .foregroundStyle(.green)
+        }
     }
 }
 

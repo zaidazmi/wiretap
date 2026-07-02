@@ -32,6 +32,7 @@ enum WiretapAccessibility {
         static let emptyRecordButton = "wiretap.library.empty.record"
         static let emptyPermissionsButton = "wiretap.library.empty.permissions"
         static let emptyClearSearchButton = "wiretap.library.empty.clearSearch"
+        static let statusStopButton = "wiretap.library.status.stop"
         static let toolbarPermissionsButton = "wiretap.library.toolbar.permissions"
         static let toolbarRecordButton = "wiretap.library.toolbar.record"
 
@@ -43,6 +44,8 @@ enum WiretapAccessibility {
     enum Detail {
         static let root = "wiretap.detail.root"
         static let titleField = "wiretap.detail.title"
+        static let activeRecording = "wiretap.detail.activeRecording"
+        static let activeStopButton = "wiretap.detail.activeRecording.stop"
         static let player = "wiretap.detail.player"
         static let playPauseButton = "wiretap.detail.player.playPause"
         static let seekSlider = "wiretap.detail.player.seek"

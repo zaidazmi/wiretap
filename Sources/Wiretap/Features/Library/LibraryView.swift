@@ -47,9 +47,81 @@ private struct LibraryStatusStrip: View {
     let store: WiretapStore
 
     var body: some View {
+        if store.isRecording {
+            activeBody
+        } else {
+            idleBody
+        }
+    }
+
+    private var activeBody: some View {
+        HStack(spacing: 16) {
+            LiveRecordingGlyph(size: 48)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Live")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.red, in: Capsule(style: .continuous))
+
+                    Text(store.recordingTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+
+                HStack(spacing: 12) {
+                    Text(store.recordingSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    LiveWaveformMeter(color: .red, barCount: 12)
+                        .frame(width: 92)
+                }
+            }
+
+            Spacer(minLength: 16)
+
+            LibraryMetric(title: "Elapsed", value: store.elapsedText, emphasis: true)
+
+            Button {
+                store.stopRecording()
+            } label: {
+                Label("Stop Recording", systemImage: "stop.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(.red)
+            .help("Stop Recording")
+            .accessibilityIdentifier(WiretapAccessibility.Library.statusStopButton)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 13)
+        .background {
+            LinearGradient(
+                colors: [
+                    Color.red.opacity(0.13),
+                    Color(nsColor: .windowBackgroundColor)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.red.opacity(0.18))
+                .frame(height: 1)
+        }
+        .accessibilityIdentifier(WiretapAccessibility.Library.statusStrip)
+    }
+
+    private var idleBody: some View {
         HStack(spacing: 16) {
             HStack(spacing: 10) {
-                RecordingStatusBadge(isRecording: store.isRecording)
+                RecordingStatusBadge(isRecording: false)
                     .font(.title3)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -63,7 +135,7 @@ private struct LibraryStatusStrip: View {
 
             Spacer()
 
-            LibraryMetric(title: "Elapsed", value: store.isRecording ? store.elapsedText : "00:00")
+            LibraryMetric(title: "Elapsed", value: "00:00")
             LibraryMetric(title: "Recordings", value: "\(store.recordings.count)")
             LibraryMetric(title: "Duration", value: store.totalDurationText)
             LibraryMetric(title: "Size", value: store.totalFileSizeText)
@@ -78,6 +150,7 @@ private struct LibraryStatusStrip: View {
 private struct LibraryMetric: View {
     let title: String
     let value: String
+    var emphasis = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
@@ -85,7 +158,7 @@ private struct LibraryMetric: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.callout.weight(.semibold))
+                .font(emphasis ? .title3.weight(.semibold) : .callout.weight(.semibold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)

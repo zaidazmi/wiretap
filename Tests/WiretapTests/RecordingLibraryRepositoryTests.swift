@@ -71,6 +71,16 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(record.recording(baseDirectory: temporaryDirectory), recording)
     }
 
+    func testTemporarySourceURLUsesLosslessCaptureContainer() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+
+        let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+
+        XCTAssertEqual(microphoneURL.pathExtension, "caf")
+        XCTAssertEqual(microphoneURL.lastPathComponent, "\(id.uuidString)-microphone.caf")
+    }
+
     func testLegacyJSONMetadataImportsIntoSwiftDataStore() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()

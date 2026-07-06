@@ -23,8 +23,8 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         temporaryDirectory = nil
     }
 
-    func testQueuedWritesFlushToReadableM4A() async throws {
-        let outputURL = temporaryDirectory.appendingPathComponent("queued-writes.m4a")
+    func testQueuedWritesFlushToReadableCAF() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("queued-writes.caf")
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48_000,
@@ -53,7 +53,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
     }
 
     func testFlushReportsDroppedFramesWhenReusableBufferPoolIsExhausted() throws {
-        let outputURL = temporaryDirectory.appendingPathComponent("small-pool-overflow.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("small-pool-overflow.caf")
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48_000,
@@ -88,7 +88,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
     }
 
     func testInterleavedInputReportsExactCapturedFrameCount() async throws {
-        let outputURL = temporaryDirectory.appendingPathComponent("interleaved-input.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("interleaved-input.caf")
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48_000,
@@ -113,8 +113,34 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(duration, 0.125, accuracy: 0.05)
     }
 
+    func testLowSampleRateInterleavedInputKeepsDuration() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("low-rate-interleaved-input.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 24_000,
+            channels: 2,
+            interleaved: true
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.25)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        writer?.write(inputData: buffer.audioBufferList)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        XCTAssertEqual(result?.capturedFrameCount, Int64(buffer.frameLength))
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.25, accuracy: 0.04)
+    }
+
     func testOversizedInputReportsDroppedFramesWithoutAllocatingFallback() throws {
-        let outputURL = temporaryDirectory.appendingPathComponent("oversized-drop.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("oversized-drop.caf")
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48_000,
@@ -144,7 +170,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
             case failed
         }
 
-        let outputURL = temporaryDirectory.appendingPathComponent("write-failure.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("write-failure.caf")
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48_000,
@@ -167,7 +193,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
     }
 
     func testFlushReportsCapturedFrameCount() throws {
-        let outputURL = temporaryDirectory.appendingPathComponent("frame-count.m4a")
+        let outputURL = temporaryDirectory.appendingPathComponent("frame-count.caf")
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48_000,

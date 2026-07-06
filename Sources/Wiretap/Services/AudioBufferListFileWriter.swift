@@ -18,13 +18,7 @@ final class AudioBufferListFileWriter {
             try audioFile.write(from: buffer)
         }
     ) throws {
-        let channelCount = max(1, Int(inputFormat.channelCount))
-        let outputSettings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: inputFormat.sampleRate,
-            AVNumberOfChannelsKey: channelCount,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
+        let outputSettings = Self.linearPCMSettings(for: inputFormat)
 
         self.inputFormat = inputFormat
         self.state = WriteState(audioFile: try AVAudioFile(
@@ -106,6 +100,15 @@ final class AudioBufferListFileWriter {
 
         copy(sourceBuffer: sourceBuffer, into: pendingBuffer.buffer)
         return .success(pendingBuffer)
+    }
+
+    private static func linearPCMSettings(for inputFormat: AVAudioFormat) -> [String: Any] {
+        var settings = inputFormat.settings
+        settings[AVFormatIDKey] = Int(kAudioFormatLinearPCM)
+        settings[AVSampleRateKey] = inputFormat.sampleRate
+        settings[AVNumberOfChannelsKey] = max(1, Int(inputFormat.channelCount))
+        settings[AVLinearPCMIsNonInterleaved] = false
+        return settings
     }
 
     private func copy(

@@ -52,8 +52,8 @@ final class AudioMixerWriterTests: XCTestCase {
     }
 
     func testMixCombinesSourcesIntoSingleM4A() async throws {
-        let systemURL = temporaryDirectory.appendingPathComponent("system.m4a")
-        let micURL = temporaryDirectory.appendingPathComponent("microphone.m4a")
+        let systemURL = temporaryDirectory.appendingPathComponent("system.caf")
+        let micURL = temporaryDirectory.appendingPathComponent("microphone.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("mixed.m4a")
         try writeTone(to: systemURL, duration: 0.35, frequency: 440)
         try writeTone(to: micURL, duration: 0.2, frequency: 660)
@@ -84,8 +84,8 @@ final class AudioMixerWriterTests: XCTestCase {
     }
 
     func testMixLimitsSummedPeaks() async throws {
-        let systemURL = temporaryDirectory.appendingPathComponent("loud-system.m4a")
-        let micURL = temporaryDirectory.appendingPathComponent("loud-microphone.m4a")
+        let systemURL = temporaryDirectory.appendingPathComponent("loud-system.caf")
+        let micURL = temporaryDirectory.appendingPathComponent("loud-microphone.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("limited.m4a")
         try writeTone(to: systemURL, duration: 0.2, frequency: 440, amplitude: 0.95)
         try writeTone(to: micURL, duration: 0.2, frequency: 440, amplitude: 0.95)
@@ -107,7 +107,7 @@ final class AudioMixerWriterTests: XCTestCase {
     }
 
     func testMixConvertsInputTo48kStereoOutput() async throws {
-        let micURL = temporaryDirectory.appendingPathComponent("microphone-44k-mono.m4a")
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-44k-mono.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("converted-output.m4a")
         try writeTone(
             to: micURL,
@@ -136,9 +136,28 @@ final class AudioMixerWriterTests: XCTestCase {
         )
     }
 
+    func testMixBoostsQuietMicrophoneInput() async throws {
+        let micURL = temporaryDirectory.appendingPathComponent("quiet-microphone.caf")
+        let outputURL = temporaryDirectory.appendingPathComponent("boosted-microphone.m4a")
+        try writeTone(to: micURL, duration: 0.24, frequency: 660, amplitude: 0.02)
+
+        _ = try await AudioMixerWriter(microphoneGain: 3).mix(
+            inputs: [
+                AudioMixerInput(url: micURL, source: .microphone)
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertGreaterThan(
+            try averageAbsoluteAmplitude(in: outputURL, from: 0.04, duration: 0.12),
+            0.025
+        )
+        XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: outputURL), 0.12)
+    }
+
     func testMixIgnoresInputWithoutAudioTrack() async throws {
         let emptyURL = temporaryDirectory.appendingPathComponent("empty.m4a")
-        let micURL = temporaryDirectory.appendingPathComponent("microphone.m4a")
+        let micURL = temporaryDirectory.appendingPathComponent("microphone.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("mixed.m4a")
         try Data().write(to: emptyURL)
         try writeTone(to: micURL, duration: 0.2, frequency: 660)
@@ -157,7 +176,7 @@ final class AudioMixerWriterTests: XCTestCase {
 
     func testMixIgnoresMissingOffsetInputWhenCalculatingDuration() async throws {
         let missingURL = temporaryDirectory.appendingPathComponent("missing-system.m4a")
-        let micURL = temporaryDirectory.appendingPathComponent("microphone-only.m4a")
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-only.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("microphone-only-output.m4a")
         try writeTone(to: micURL, duration: 0.2, frequency: 660)
 
@@ -174,7 +193,7 @@ final class AudioMixerWriterTests: XCTestCase {
     }
 
     func testMixDurationMatchesOffsetTimeline() async throws {
-        let micURL = temporaryDirectory.appendingPathComponent("microphone-timeline.m4a")
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-timeline.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("mixed-timeline.m4a")
         try writeTone(to: micURL, duration: 0.16, frequency: 660)
 
@@ -189,7 +208,7 @@ final class AudioMixerWriterTests: XCTestCase {
     }
 
     func testMixHonorsInputStartOffset() async throws {
-        let micURL = temporaryDirectory.appendingPathComponent("microphone-offset.m4a")
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-offset.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("mixed-offset.m4a")
         try writeTone(to: micURL, duration: 0.16, frequency: 660)
 
@@ -219,7 +238,7 @@ final class AudioMixerWriterTests: XCTestCase {
     }
 
     func testMixPadsToTargetDurationWithoutSlowingInput() async throws {
-        let micURL = temporaryDirectory.appendingPathComponent("microphone-drift.m4a")
+        let micURL = temporaryDirectory.appendingPathComponent("microphone-drift.caf")
         let outputURL = temporaryDirectory.appendingPathComponent("mixed-drift.m4a")
         try writeTone(to: micURL, duration: 0.16, frequency: 660)
 
@@ -283,13 +302,28 @@ final class AudioMixerWriterTests: XCTestCase {
             }
         }
 
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: Int(channelCount),
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-        let file = try AVAudioFile(forWriting: url, settings: settings)
+        let settings: [String: Any]
+        if url.pathExtension.lowercased() == "caf" {
+            var pcmSettings = format.settings
+            pcmSettings[AVFormatIDKey] = Int(kAudioFormatLinearPCM)
+            pcmSettings[AVSampleRateKey] = sampleRate
+            pcmSettings[AVNumberOfChannelsKey] = Int(channelCount)
+            pcmSettings[AVLinearPCMIsNonInterleaved] = false
+            settings = pcmSettings
+        } else {
+            settings = [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: Int(channelCount),
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+        }
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: settings,
+            commonFormat: format.commonFormat,
+            interleaved: format.isInterleaved
+        )
         try file.write(from: buffer)
     }
 

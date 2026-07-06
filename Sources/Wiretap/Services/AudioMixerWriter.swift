@@ -8,6 +8,11 @@ struct AudioMixerWriter {
     private let maximumFrameCount: AVAudioFrameCount = 4_096
     private let limiter = AudioSampleLimiter(ceiling: 0.95)
     private let maximumConsecutiveRenderStalls = 128
+    private let microphoneGain: Float
+
+    init(microphoneGain: Float = 3.0) {
+        self.microphoneGain = max(0, microphoneGain)
+    }
 
     func mix(inputs: [AudioMixerInput], outputURL: URL) async throws -> AudioMixResult {
         logger.info("Mix requested inputs=\(inputs.count, privacy: .public) output=\(outputURL.lastPathComponent, privacy: .public)")
@@ -109,6 +114,7 @@ struct AudioMixerWriter {
             let playerNode = AVAudioPlayerNode()
 
             let file = try AVAudioFile(forReading: input.input.input.url)
+            playerNode.volume = sourceGain(for: input.input.input.source)
             let startFrame = AVAudioFramePosition(round(input.input.input.startOffset * outputSampleRate))
             let startTime = startFrame > 0
                 ? AVAudioTime(sampleTime: startFrame, atRate: outputSampleRate)
@@ -191,6 +197,15 @@ struct AudioMixerWriter {
         }
 
         return TimeInterval(targetFrames) / outputSampleRate
+    }
+
+    private func sourceGain(for source: RecordingSource) -> Float {
+        switch source {
+        case .microphone:
+            microphoneGain
+        case .systemAudio:
+            1
+        }
     }
 }
 

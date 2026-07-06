@@ -172,7 +172,7 @@ struct RecordingLibraryRepository {
         try prepare()
         return recordingsDirectory
             .appendingPathComponent("\(id.uuidString)-\(source)", isDirectory: false)
-            .appendingPathExtension("m4a")
+            .appendingPathExtension("caf")
     }
 
     func recoveryURL(for id: Recording.ID) throws -> URL {
@@ -240,8 +240,13 @@ struct RecordingLibraryRepository {
     }
 
     private func temporarySourceURLs(for id: Recording.ID) -> [URL] {
-        ["system", "microphone"].compactMap { source in
-            try? temporarySourceURL(for: id, source: source)
+        ["system", "microphone"].flatMap { source in
+            [
+                try? temporarySourceURL(for: id, source: source),
+                recordingsDirectory
+                    .appendingPathComponent("\(id.uuidString)-\(source)", isDirectory: false)
+                    .appendingPathExtension("m4a")
+            ].compactMap(\.self)
         }
     }
 

@@ -54,15 +54,13 @@ final class SystemAudioTap: SystemAudioTapping {
             }
 
             var streamDescription = try tap.format
-            guard let inputFormat = AVAudioFormat(streamDescription: &streamDescription) else {
+            guard let tapInputFormat = AVAudioFormat(streamDescription: &streamDescription) else {
                 try system.destroyProcessTap(tap)
                 throw SystemAudioTapError.unsupportedFormat
             }
             logger.info(
-                "System audio tap format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) outputDevice=\(outputDeviceUID, privacy: .private(mask: .hash)) tap=\(tapUID, privacy: .private(mask: .hash))"
+                "System audio tap format=\(WiretapLog.audioFormatSummary(tapInputFormat), privacy: .public) outputDevice=\(outputDeviceUID, privacy: .private(mask: .hash)) tap=\(tapUID, privacy: .private(mask: .hash))"
             )
-
-            let writer = try AudioBufferListFileWriter(outputURL: outputURL, inputFormat: inputFormat)
 
             let aggregateDescription: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "Wiretap System Audio Device",
@@ -81,6 +79,20 @@ final class SystemAudioTap: SystemAudioTapping {
             guard let aggregateDevice = try system.makeAggregateDevice(description: aggregateDescription) else {
                 try system.destroyProcessTap(tap)
                 throw SystemAudioTapError.aggregateCreationFailed
+            }
+
+            let inputFormat = captureFormat(for: aggregateDevice, fallback: tapInputFormat)
+            logger.info(
+                "System audio aggregate capture format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) aggregateDevice=\(aggregateDevice.id, privacy: .public)"
+            )
+
+            let writer: AudioBufferListFileWriter
+            do {
+                writer = try AudioBufferListFileWriter(outputURL: outputURL, inputFormat: inputFormat)
+            } catch {
+                try? system.destroyAggregateDevice(aggregateDevice)
+                try? system.destroyProcessTap(tap)
+                throw error
             }
 
             self.tap = tap
@@ -185,6 +197,36 @@ final class SystemAudioTap: SystemAudioTapping {
         return try AudioHardwareDevice(id: outputDeviceID).uid
     }
 
+    private func captureFormat(
+        for aggregateDevice: AudioHardwareAggregateDevice,
+        fallback tapFormat: AVAudioFormat
+    ) -> AVAudioFormat {
+        do {
+            let streams = try AudioHardwareDevice(id: aggregateDevice.id).streams
+
+            for stream in streams where (try? stream.direction) == .input {
+                var streamDescription = try stream.virtualFormat
+                if let format = AVAudioFormat(streamDescription: &streamDescription),
+                   format.channelCount > 0 {
+                    return format
+                }
+            }
+
+            for stream in streams {
+                var streamDescription = try stream.virtualFormat
+                if let format = AVAudioFormat(streamDescription: &streamDescription),
+                   format.channelCount > 0 {
+                    return format
+                }
+            }
+        } catch {
+            logger.warning(
+                "Could not resolve aggregate capture format; falling back to tap format error=\(error.localizedDescription, privacy: .public)"
+            )
+        }
+
+        return tapFormat
+    }
 }
 
 enum SystemAudioTapError: LocalizedError {

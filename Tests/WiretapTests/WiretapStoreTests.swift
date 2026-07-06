@@ -460,6 +460,35 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testStartRecordingBlocksLoopbackMicrophoneForSystemAndMicrophoneMode() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap()
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            microphoneRouteInspector: MicrophoneRouteInspector {
+                MicrophoneRouteInspection(deviceName: "BlackHole 2ch")
+            },
+            captureMode: .systemAndMicrophone,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+
+        XCTAssertFalse(store.isRecording)
+        XCTAssertTrue(store.recordings.isEmpty)
+        XCTAssertTrue(try repository.loadRecordings().isEmpty)
+        XCTAssertEqual(systemAudioTap.startCallCount, 0)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 0)
+        XCTAssertEqual(store.notice?.title, "Choose a Microphone Input")
+        XCTAssertTrue(store.notice?.message.localizedStandardContains("avoid doubled playback") == true)
+        XCTAssertEqual(store.notice?.recovery, .microphoneSettings)
+    }
+
+    @MainActor
     func testStopRecordingFinalizesMixedOutputAndCleansTemporarySources() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(
@@ -1299,14 +1328,28 @@ final class WiretapStoreTests: XCTestCase {
             channels[1][frame] = sample
         }
 
-        let file = try AVAudioFile(
-            forWriting: url,
-            settings: [
+        let settings: [String: Any]
+        if url.pathExtension.lowercased() == "caf" {
+            var pcmSettings = format.settings
+            pcmSettings[AVFormatIDKey] = Int(kAudioFormatLinearPCM)
+            pcmSettings[AVSampleRateKey] = 48_000
+            pcmSettings[AVNumberOfChannelsKey] = 2
+            pcmSettings[AVLinearPCMIsNonInterleaved] = false
+            settings = pcmSettings
+        } else {
+            settings = [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
                 AVSampleRateKey: 48_000,
                 AVNumberOfChannelsKey: 2,
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
             ]
+        }
+
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: settings,
+            commonFormat: format.commonFormat,
+            interleaved: format.isInterleaved
         )
         try file.write(from: buffer)
     }

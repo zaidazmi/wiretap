@@ -10,7 +10,7 @@ struct AudioMixerWriter {
     private let maximumConsecutiveRenderStalls = 128
     private let microphoneGain: Float
 
-    init(microphoneGain: Float = 3.0) {
+    init(microphoneGain: Float = 1.0) {
         self.microphoneGain = max(0, microphoneGain)
     }
 

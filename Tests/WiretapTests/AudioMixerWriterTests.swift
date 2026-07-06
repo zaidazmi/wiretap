@@ -155,6 +155,24 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: outputURL), 0.12)
     }
 
+    func testMixDoesNotBoostMicrophoneInputByDefault() async throws {
+        let micURL = temporaryDirectory.appendingPathComponent("unboosted-microphone.caf")
+        let outputURL = temporaryDirectory.appendingPathComponent("unboosted-output.m4a")
+        try writeTone(to: micURL, duration: 0.24, frequency: 660, amplitude: 0.08)
+
+        _ = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: micURL, source: .microphone)
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertLessThan(
+            try averageAbsoluteAmplitude(in: outputURL, from: 0.04, duration: 0.12),
+            0.08
+        )
+    }
+
     func testMixIgnoresInputWithoutAudioTrack() async throws {
         let emptyURL = temporaryDirectory.appendingPathComponent("empty.m4a")
         let micURL = temporaryDirectory.appendingPathComponent("microphone.caf")

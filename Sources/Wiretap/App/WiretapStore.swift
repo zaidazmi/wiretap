@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import Observation
 
@@ -109,6 +110,44 @@ private struct RecordingStartFailure: LocalizedError {
 }
 
 @MainActor
+struct MicrophoneRouteInspector {
+    var inspectDefaultInput: () -> MicrophoneRouteInspection?
+
+    static let permissive = MicrophoneRouteInspector {
+        nil
+    }
+
+    static let live = MicrophoneRouteInspector {
+        guard let device = AVCaptureDevice.default(for: .audio) else {
+            return nil
+        }
+
+        return MicrophoneRouteInspection(deviceName: device.localizedName)
+    }
+}
+
+struct MicrophoneRouteInspection: Equatable {
+    var deviceName: String
+
+    var isLikelySystemAudioLoopback: Bool {
+        let normalizedName = deviceName.lowercased()
+        return Self.loopbackDeviceNameFragments.contains { normalizedName.contains($0) }
+    }
+
+    private static let loopbackDeviceNameFragments = [
+        "aggregate",
+        "background music",
+        "blackhole",
+        "loopback",
+        "multi-output",
+        "soundflower",
+        "sound siphon",
+        "vb-cable",
+        "ishowu"
+    ]
+}
+
+@MainActor
 struct RecordingFileActions {
     var reveal: (URL) -> Void
     var chooseExportDestination: (String) -> URL?
@@ -170,6 +209,7 @@ final class WiretapStore {
     @ObservationIgnored private let mixerWriter: AudioMixerWriter
     @ObservationIgnored private let permissionManager: PermissionManager
     @ObservationIgnored private let fileActions: RecordingFileActions
+    @ObservationIgnored private let microphoneRouteInspector: MicrophoneRouteInspector
     @ObservationIgnored private let captureModeStorage: CaptureModeStorage?
     @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
     @ObservationIgnored private let logger = WiretapLog.capture
@@ -194,6 +234,7 @@ final class WiretapStore {
         mixerWriter: AudioMixerWriter = AudioMixerWriter(),
         permissionManager: PermissionManager = PermissionManager(),
         fileActions: RecordingFileActions = .live,
+        microphoneRouteInspector: MicrophoneRouteInspector = .permissive,
         captureMode: RecordingCaptureMode = .systemAndMicrophone,
         captureModeStorage: CaptureModeStorage? = nil,
         minimumFreeDiskSpaceBytes: Int64 = 1_000_000_000,
@@ -209,6 +250,7 @@ final class WiretapStore {
         self.mixerWriter = mixerWriter
         self.permissionManager = permissionManager
         self.fileActions = fileActions
+        self.microphoneRouteInspector = microphoneRouteInspector
         self.captureModeStorage = captureModeStorage
         self.minimumFreeDiskSpaceBytes = minimumFreeDiskSpaceBytes
         self.captureStallThreshold = captureStallThreshold
@@ -404,12 +446,14 @@ final class WiretapStore {
         do {
             try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
 
+            let requestedCaptureSources = captureMode.sources
+            try validateMicrophoneRoute(for: requestedCaptureSources)
+
             let id = UUID()
             let startedAt = Date()
             let finalURL = try repository.recordingURL(for: id)
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
-            let requestedCaptureSources = captureMode.sources
             let requestedCaptureMode = captureMode.rawValue
             var captureSources = Set<RecordingSource>()
             cleanupURLs = [microphoneURL, systemAudioURL]
@@ -737,6 +781,20 @@ final class WiretapStore {
 
     private func persistLibrary() throws {
         try repository.saveRecordings(recordings)
+    }
+
+    private func validateMicrophoneRoute(for requestedSources: Set<RecordingSource>) throws {
+        guard requestedSources.contains(.systemAudio),
+              requestedSources.contains(.microphone),
+              let inspection = microphoneRouteInspector.inspectDefaultInput(),
+              inspection.isLikelySystemAudioLoopback
+        else { return }
+
+        throw RecordingStartFailure(notice: WiretapNotice(
+            title: "Choose a Microphone Input",
+            message: "\(inspection.deviceName) looks like a virtual or aggregate audio route that can already contain system audio. Choose a physical microphone before using System Audio + Microphone to avoid doubled playback.",
+            recovery: .microphoneSettings
+        ))
     }
 
     private func resetRecordingState() {
@@ -1312,7 +1370,10 @@ private extension WiretapStore {
 
 extension WiretapStore {
     static func live() -> WiretapStore {
-        let store = WiretapStore(captureModeStorage: CaptureModeStorage())
+        let store = WiretapStore(
+            microphoneRouteInspector: .live,
+            captureModeStorage: CaptureModeStorage()
+        )
         store.loadLibrary()
         return store
     }

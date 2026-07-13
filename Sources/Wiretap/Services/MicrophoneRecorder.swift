@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioToolbox
 import CoreAudio
 import Foundation
 
@@ -15,15 +16,16 @@ final class MicrophoneRecorder: MicrophoneRecording {
     private let ioQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.microphone-recorder", qos: .userInitiated)
     private var device: AudioHardwareDevice?
     private var ioProcID: AudioDeviceIOProcID?
-    private var voiceProcessingEngine: AVAudioEngine?
-    private var voiceProcessingSink: AVAudioSinkNode?
+    private var processingEngine: AVAudioEngine?
+    private var processingSink: AVAudioSinkNode?
+    private var voiceIsolationEffect: AVAudioUnitEffect?
     private var writer: AudioBufferListFileWriter?
     private var startedAt: Date?
     private lazy var formatObserver = AudioDeviceFormatObserver(queue: ioQueue)
     private let logger = WiretapLog.capture
 
     var isRecording: Bool {
-        ioProcID != nil || voiceProcessingEngine?.isRunning == true
+        ioProcID != nil || processingEngine?.isRunning == true
     }
 
     var capturedFrameCount: Int64 {
@@ -40,8 +42,28 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
             let outputRoute = try? currentOutputRoute()
             switch MicrophoneCapturePolicy.mode(for: outputRoute) {
-            case .echoCancelled:
-                try startEchoCancelledRecording(to: url, inputDevice: device, outputRoute: outputRoute)
+            case .speakerProcessed:
+                do {
+                    try startVoiceIsolatedRecording(
+                        to: url,
+                        inputDevice: device,
+                        outputRoute: outputRoute
+                    )
+                } catch {
+                    // Sound Isolation does not take ownership of the output
+                    // device, so it avoids VoiceProcessingIO's unavoidable
+                    // speaker ducking. Fall back to acoustic echo cancellation
+                    // only if the effect is unavailable on this Mac.
+                    logger.warning(
+                        "Voice-isolated microphone capture unavailable; falling back to VoiceProcessingIO error=\(error.localizedDescription, privacy: .public)"
+                    )
+                    stopRecording()
+                    try startEchoCancelledRecording(
+                        to: url,
+                        inputDevice: device,
+                        outputRoute: outputRoute
+                    )
+                }
             case .raw:
                 try startRawRecording(to: url, device: device, outputRoute: outputRoute)
             }
@@ -54,12 +76,12 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
     @discardableResult
     func stopRecording() -> CaptureStopResult {
-        let wasRecording = device != nil || voiceProcessingEngine != nil || writer != nil
+        let wasRecording = device != nil || processingEngine != nil || writer != nil
 
         formatObserver.stop()
 
-        if let voiceProcessingEngine {
-            voiceProcessingEngine.stop()
+        if let processingEngine {
+            processingEngine.stop()
         }
 
         if let device, let ioProcID {
@@ -77,8 +99,9 @@ final class MicrophoneRecorder: MicrophoneRecording {
         )
         device = nil
         ioProcID = nil
-        voiceProcessingEngine = nil
-        voiceProcessingSink = nil
+        processingEngine = nil
+        processingSink = nil
+        voiceIsolationEffect = nil
         writer = nil
         startedAt = nil
 
@@ -89,6 +112,67 @@ final class MicrophoneRecorder: MicrophoneRecording {
         }
 
         return result
+    }
+
+    private func startVoiceIsolatedRecording(
+        to url: URL,
+        inputDevice: AudioHardwareDevice,
+        outputRoute: MicrophoneOutputRoute?
+    ) throws {
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let hardwareInputFormat = inputNode.inputFormat(forBus: 0)
+        guard hardwareInputFormat.channelCount > 0, hardwareInputFormat.sampleRate > 0 else {
+            throw AudioRecordingError.noDefaultInputDevice
+        }
+        guard let captureFormat = MicrophoneProcessingFormat.captureFormat(
+            sampleRate: hardwareInputFormat.sampleRate,
+            hardwareChannelCount: hardwareInputFormat.channelCount
+        ) else {
+            throw AudioRecordingError.unsupportedFormat
+        }
+
+        let component = AudioComponentDescription(
+            componentType: kAudioUnitType_Effect,
+            componentSubType: kAudioUnitSubType_AUSoundIsolation,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
+        let effect = AVAudioUnitEffect(audioComponentDescription: component)
+        effect.auAudioUnit.parameterTree?
+            .parameter(withAddress: AUParameterAddress(kAUSoundIsolationParam_WetDryMixPercent))?
+            .value = 100
+        let writer = try AudioBufferListFileWriter(outputURL: url, inputFormat: captureFormat)
+        let sinkNode = AVAudioSinkNode { [weak writer] timestamp, _, inputData in
+            let sampleTime = timestamp.pointee.mFlags.contains(.sampleTimeValid)
+                ? timestamp.pointee.mSampleTime
+                : nil
+            writer?.write(inputData: inputData, sampleTime: sampleTime)
+            return noErr
+        }
+
+        engine.attach(effect)
+        engine.attach(sinkNode)
+        engine.connect(inputNode, to: effect, format: captureFormat)
+        engine.connect(effect, to: sinkNode, format: captureFormat)
+
+        self.writer = writer
+        processingEngine = engine
+        processingSink = sinkNode
+        voiceIsolationEffect = effect
+
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            throw AudioRecordingError.echoCancellationUnavailable(underlying: error)
+        }
+
+        startedAt = Date()
+        logger.info(
+            "Microphone capture started mode=voice-isolated inputDevice=\(inputDevice.id, privacy: .public) outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) hardwareFormat=\(WiretapLog.audioFormatSummary(hardwareInputFormat), privacy: .public) captureFormat=\(WiretapLog.audioFormatSummary(captureFormat), privacy: .public)"
+        )
     }
 
     private func startEchoCancelledRecording(
@@ -124,7 +208,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
         guard hardwareInputFormat.channelCount > 0, hardwareInputFormat.sampleRate > 0 else {
             throw AudioRecordingError.noDefaultInputDevice
         }
-        guard let captureFormat = MicrophoneVoiceProcessingFormat.captureFormat(
+        guard let captureFormat = MicrophoneProcessingFormat.captureFormat(
             sampleRate: hardwareInputFormat.sampleRate,
             hardwareChannelCount: hardwareInputFormat.channelCount
         ) else {
@@ -149,8 +233,8 @@ final class MicrophoneRecorder: MicrophoneRecording {
         engine.connect(inputNode, to: sinkNode, format: captureFormat)
 
         self.writer = writer
-        voiceProcessingEngine = engine
-        voiceProcessingSink = sinkNode
+        processingEngine = engine
+        processingSink = sinkNode
 
         engine.prepare()
         do {
@@ -247,11 +331,11 @@ final class MicrophoneRecorder: MicrophoneRecording {
 }
 
 enum MicrophoneCaptureMode: Equatable {
-    case echoCancelled
+    case speakerProcessed
     case raw
 }
 
-enum MicrophoneVoiceProcessingFormat {
+enum MicrophoneProcessingFormat {
     static func captureFormat(
         sampleRate: Double,
         hardwareChannelCount: AVAudioChannelCount
@@ -278,9 +362,9 @@ struct MicrophoneOutputRoute: Equatable {
 enum MicrophoneCapturePolicy {
     static func mode(for outputRoute: MicrophoneOutputRoute?) -> MicrophoneCaptureMode {
         guard let outputRoute else {
-            // Unknown and speaker-like routes need acoustic echo cancellation.
+            // Unknown and speaker-like routes need isolation from speaker audio.
             // Raw capture is only safe when isolation is positively identified.
-            return .echoCancelled
+            return .speakerProcessed
         }
 
         if outputRoute.transportType == kAudioDeviceTransportTypeBluetooth ||
@@ -307,7 +391,7 @@ enum MicrophoneCapturePolicy {
 
         return isolatedOutputNameFragments.contains(where: normalizedName.contains)
             ? .raw
-            : .echoCancelled
+            : .speakerProcessed
     }
 }
 

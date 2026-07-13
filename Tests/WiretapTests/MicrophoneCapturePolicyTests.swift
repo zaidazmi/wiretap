@@ -11,7 +11,7 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
             terminalTypes: [kAudioStreamTerminalTypeSpeaker]
         )
 
-        XCTAssertEqual(MicrophoneCapturePolicy.mode(for: route), .echoCancelled)
+        XCTAssertEqual(MicrophoneCapturePolicy.mode(for: route), .speakerProcessed)
     }
 
     func testBluetoothOutputKeepsRawCapture() {
@@ -43,13 +43,13 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
         XCTAssertEqual(MicrophoneCapturePolicy.mode(for: route), .raw)
     }
 
-    func testUnknownOutputRequiresEchoCancellation() {
-        XCTAssertEqual(MicrophoneCapturePolicy.mode(for: nil), .echoCancelled)
+    func testUnknownOutputRequiresSpeakerProcessing() {
+        XCTAssertEqual(MicrophoneCapturePolicy.mode(for: nil), .speakerProcessed)
     }
 
-    func testVoiceProcessingDownmixesBuiltInMicrophoneArrayToMono() throws {
+    func testSpeakerProcessingDownmixesBuiltInMicrophoneArrayToMono() throws {
         let captureFormat = try XCTUnwrap(
-            MicrophoneVoiceProcessingFormat.captureFormat(
+            MicrophoneProcessingFormat.captureFormat(
                 sampleRate: 48_000,
                 hardwareChannelCount: 9
             )

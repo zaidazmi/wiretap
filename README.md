@@ -79,7 +79,7 @@ Required repository secrets:
 
 - Captures the display-wide system-audio mix through ScreenCaptureKit while excluding Wiretap's own playback.
 - Captures the current macOS default input device.
-- Uses acoustic echo cancellation for speaker output so the microphone track does not add a delayed second copy of system audio. Headphone and Bluetooth routes keep the raw microphone path to preserve fidelity and handle device format renegotiation.
+- Uses Apple Sound Isolation for speaker output so the microphone track suppresses far-field speaker playback without lowering the Mac's live or captured system-audio level. VoiceProcessingIO acoustic echo cancellation remains a safety fallback when Sound Isolation cannot start. Headphone and Bluetooth routes keep the raw microphone path to preserve fidelity and handle device format renegotiation.
 - Writes source streams losslessly to temporary `.caf` files, then finalizes one 48 kHz stereo AAC `.m4a`.
 - Applies source alignment, silence padding, and peak limiting during offline mixing without pitch-shifting captured audio.
 - Checks available disk space before starting a recording.

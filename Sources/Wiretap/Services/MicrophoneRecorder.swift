@@ -16,16 +16,14 @@ final class MicrophoneRecorder: MicrophoneRecording {
     private let ioQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.microphone-recorder", qos: .userInitiated)
     private var device: AudioHardwareDevice?
     private var ioProcID: AudioDeviceIOProcID?
-    private var processingEngine: AVAudioEngine?
-    private var processingSink: AVAudioSinkNode?
-    private var voiceIsolationEffect: AVAudioUnitEffect?
     private var writer: AudioBufferListFileWriter?
+    private var postProcessing: MicrophonePostProcessing = .none
     private var startedAt: Date?
     private lazy var formatObserver = AudioDeviceFormatObserver(queue: ioQueue)
     private let logger = WiretapLog.capture
 
     var isRecording: Bool {
-        ioProcID != nil || processingEngine?.isRunning == true
+        ioProcID != nil
     }
 
     var capturedFrameCount: Int64 {
@@ -41,32 +39,13 @@ final class MicrophoneRecorder: MicrophoneRecording {
             }
 
             let outputRoute = try? currentOutputRoute()
-            switch MicrophoneCapturePolicy.mode(for: outputRoute) {
-            case .speakerProcessed:
-                do {
-                    try startVoiceIsolatedRecording(
-                        to: url,
-                        inputDevice: device,
-                        outputRoute: outputRoute
-                    )
-                } catch {
-                    // Sound Isolation does not take ownership of the output
-                    // device, so it avoids VoiceProcessingIO's unavoidable
-                    // speaker ducking. Fall back to acoustic echo cancellation
-                    // only if the effect is unavailable on this Mac.
-                    logger.warning(
-                        "Voice-isolated microphone capture unavailable; falling back to VoiceProcessingIO error=\(error.localizedDescription, privacy: .public)"
-                    )
-                    stopRecording()
-                    try startEchoCancelledRecording(
-                        to: url,
-                        inputDevice: device,
-                        outputRoute: outputRoute
-                    )
-                }
-            case .raw:
-                try startRawRecording(to: url, device: device, outputRoute: outputRoute)
-            }
+            let processing = MicrophoneCapturePolicy.postProcessing(for: outputRoute)
+            try startRawRecording(
+                to: url,
+                device: device,
+                outputRoute: outputRoute,
+                postProcessing: processing
+            )
         } catch {
             logger.error("Microphone capture failed: \(error.localizedDescription, privacy: .public)")
             stopRecording()
@@ -76,13 +55,9 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
     @discardableResult
     func stopRecording() -> CaptureStopResult {
-        let wasRecording = device != nil || processingEngine != nil || writer != nil
+        let wasRecording = device != nil || writer != nil
 
         formatObserver.stop()
-
-        if let processingEngine {
-            processingEngine.stop()
-        }
 
         if let device, let ioProcID {
             AudioDeviceStop(device.id, ioProcID)
@@ -95,173 +70,43 @@ final class MicrophoneRecorder: MicrophoneRecording {
             duration: duration,
             capturedFrameCount: flushResult?.capturedFrameCount ?? 0,
             droppedFrameCount: flushResult?.droppedFrameCount ?? 0,
-            writeError: flushResult?.writeError
+            writeError: flushResult?.writeError,
+            microphonePostProcessing: postProcessing
         )
         device = nil
         ioProcID = nil
-        processingEngine = nil
-        processingSink = nil
-        voiceIsolationEffect = nil
         writer = nil
+        postProcessing = .none
         startedAt = nil
 
         if wasRecording {
             logger.info(
-                "Microphone capture stopped duration=\(result.duration, privacy: .public) capturedFrames=\(result.capturedFrameCount, privacy: .public) droppedFrames=\(result.droppedFrameCount, privacy: .public) writeError=\(result.writeError?.localizedDescription ?? "none", privacy: .public)"
+                "Microphone capture stopped duration=\(result.duration, privacy: .public) capturedFrames=\(result.capturedFrameCount, privacy: .public) droppedFrames=\(result.droppedFrameCount, privacy: .public) postProcessing=\(result.microphonePostProcessing.rawValue, privacy: .public) writeError=\(result.writeError?.localizedDescription ?? "none", privacy: .public)"
             )
         }
 
         return result
     }
 
-    private func startVoiceIsolatedRecording(
-        to url: URL,
-        inputDevice: AudioHardwareDevice,
-        outputRoute: MicrophoneOutputRoute?
-    ) throws {
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let hardwareInputFormat = inputNode.inputFormat(forBus: 0)
-        guard hardwareInputFormat.channelCount > 0, hardwareInputFormat.sampleRate > 0 else {
-            throw AudioRecordingError.noDefaultInputDevice
-        }
-        guard let captureFormat = MicrophoneProcessingFormat.captureFormat(
-            sampleRate: hardwareInputFormat.sampleRate,
-            hardwareChannelCount: hardwareInputFormat.channelCount
-        ) else {
-            throw AudioRecordingError.unsupportedFormat
-        }
-
-        let component = AudioComponentDescription(
-            componentType: kAudioUnitType_Effect,
-            componentSubType: kAudioUnitSubType_AUSoundIsolation,
-            componentManufacturer: kAudioUnitManufacturer_Apple,
-            componentFlags: 0,
-            componentFlagsMask: 0
-        )
-        let effect = AVAudioUnitEffect(audioComponentDescription: component)
-        effect.auAudioUnit.parameterTree?
-            .parameter(withAddress: AUParameterAddress(kAUSoundIsolationParam_WetDryMixPercent))?
-            .value = 100
-        let writer = try AudioBufferListFileWriter(outputURL: url, inputFormat: captureFormat)
-        let sinkNode = AVAudioSinkNode { [weak writer] timestamp, _, inputData in
-            let sampleTime = timestamp.pointee.mFlags.contains(.sampleTimeValid)
-                ? timestamp.pointee.mSampleTime
-                : nil
-            writer?.write(inputData: inputData, sampleTime: sampleTime)
-            return noErr
-        }
-
-        engine.attach(effect)
-        engine.attach(sinkNode)
-        engine.connect(inputNode, to: effect, format: captureFormat)
-        engine.connect(effect, to: sinkNode, format: captureFormat)
-
-        self.writer = writer
-        processingEngine = engine
-        processingSink = sinkNode
-        voiceIsolationEffect = effect
-
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            throw AudioRecordingError.echoCancellationUnavailable(underlying: error)
-        }
-
-        startedAt = Date()
-        logger.info(
-            "Microphone capture started mode=voice-isolated inputDevice=\(inputDevice.id, privacy: .public) outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) hardwareFormat=\(WiretapLog.audioFormatSummary(hardwareInputFormat), privacy: .public) captureFormat=\(WiretapLog.audioFormatSummary(captureFormat), privacy: .public)"
-        )
-    }
-
-    private func startEchoCancelledRecording(
-        to url: URL,
-        inputDevice: AudioHardwareDevice,
-        outputRoute: MicrophoneOutputRoute?
-    ) throws {
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-
-        do {
-            try inputNode.setVoiceProcessingEnabled(true)
-        } catch {
-            throw AudioRecordingError.echoCancellationUnavailable(underlying: error)
-        }
-
-        // Advanced ducking limits attenuation to periods where local speech is
-        // actually present. The minimum level avoids the always-on system-audio
-        // attenuation caused by the old voice-processing implementation.
-        inputNode.voiceProcessingOtherAudioDuckingConfiguration =
-            AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
-                enableAdvancedDucking: true,
-                duckingLevel: .min
-            )
-        // Do not inherit a stale muted state from the VoiceProcessingIO unit.
-        // A muted VPIO input still renders correctly timed, all-zero buffers,
-        // which otherwise looks like a successful microphone recording.
-        inputNode.isVoiceProcessingInputMuted = false
-        inputNode.isVoiceProcessingBypassed = false
-        inputNode.isVoiceProcessingAGCEnabled = false
-
-        let hardwareInputFormat = inputNode.inputFormat(forBus: 0)
-        guard hardwareInputFormat.channelCount > 0, hardwareInputFormat.sampleRate > 0 else {
-            throw AudioRecordingError.noDefaultInputDevice
-        }
-        guard let captureFormat = MicrophoneProcessingFormat.captureFormat(
-            sampleRate: hardwareInputFormat.sampleRate,
-            hardwareChannelCount: hardwareInputFormat.channelCount
-        ) else {
-            throw AudioRecordingError.unsupportedFormat
-        }
-
-        let writer = try AudioBufferListFileWriter(outputURL: url, inputFormat: captureFormat)
-        let sinkNode = AVAudioSinkNode { [weak writer] timestamp, _, inputData in
-            let sampleTime = timestamp.pointee.mFlags.contains(.sampleTimeValid)
-                ? timestamp.pointee.mSampleTime
-                : nil
-            writer?.write(inputData: inputData, sampleTime: sampleTime)
-            return noErr
-        }
-
-        // AVAudioSinkNode is the engine's terminal receiver for an input chain.
-        // Unlike routing the microphone through a muted output mixer, it pulls
-        // the processed VoiceProcessingIO uplink without monitoring the mic to
-        // the speakers. Apple explicitly supports the voice-processing unit's
-        // client format conversion on this connection.
-        engine.attach(sinkNode)
-        engine.connect(inputNode, to: sinkNode, format: captureFormat)
-
-        self.writer = writer
-        processingEngine = engine
-        processingSink = sinkNode
-
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            throw AudioRecordingError.echoCancellationUnavailable(underlying: error)
-        }
-
-        startedAt = Date()
-        logger.info(
-            "Microphone capture started mode=echo-cancelled inputDevice=\(inputDevice.id, privacy: .public) outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) hardwareFormat=\(WiretapLog.audioFormatSummary(hardwareInputFormat), privacy: .public) captureFormat=\(WiretapLog.audioFormatSummary(captureFormat), privacy: .public)"
-        )
-    }
-
     private func startRawRecording(
         to url: URL,
         device: AudioHardwareDevice,
-        outputRoute: MicrophoneOutputRoute?
+        outputRoute: MicrophoneOutputRoute?,
+        postProcessing: MicrophonePostProcessing
     ) throws {
         let inputFormat = try inputFormat(for: device)
         let deviceUID = (try? device.uid) ?? "unknown"
         logger.info(
-            "Preparing microphone capture mode=raw device=\(device.id, privacy: .public) uid=\(deviceUID, privacy: .private(mask: .hash)) outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) output=\(url.lastPathComponent, privacy: .public)"
+            "Preparing microphone capture mode=physical-device device=\(device.id, privacy: .public) uid=\(deviceUID, privacy: .private(mask: .hash)) outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public) output=\(url.lastPathComponent, privacy: .public)"
         )
-        let writer = try AudioBufferListFileWriter(outputURL: url, inputFormat: inputFormat)
+        let writer = try AudioBufferListFileWriter(
+            outputURL: url,
+            inputFormat: inputFormat,
+            channelMapping: .primaryInput
+        )
         self.device = device
         self.writer = writer
+        self.postProcessing = postProcessing
 
         var ioProcID: AudioDeviceIOProcID?
         let createStatus = AudioDeviceCreateIOProcIDWithBlock(
@@ -290,7 +135,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
         formatObserver.start(observing: device.id) { [weak self] in
             self?.refreshCaptureFormat()
         }
-        logger.info("Microphone capture started mode=raw device=\(device.id, privacy: .public)")
+        logger.info("Microphone capture started mode=physical-device device=\(device.id, privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public)")
     }
 
     private func currentOutputRoute() throws -> MicrophoneOutputRoute? {
@@ -335,24 +180,6 @@ enum MicrophoneCaptureMode: Equatable {
     case raw
 }
 
-enum MicrophoneProcessingFormat {
-    static func captureFormat(
-        sampleRate: Double,
-        hardwareChannelCount: AVAudioChannelCount
-    ) -> AVAudioFormat? {
-        guard sampleRate > 0, hardwareChannelCount > 0 else {
-            return nil
-        }
-
-        return AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: 1,
-            interleaved: false
-        )
-    }
-}
-
 struct MicrophoneOutputRoute: Equatable {
     var name: String
     var transportType: UInt32
@@ -393,12 +220,15 @@ enum MicrophoneCapturePolicy {
             ? .raw
             : .speakerProcessed
     }
+
+    static func postProcessing(for outputRoute: MicrophoneOutputRoute?) -> MicrophonePostProcessing {
+        mode(for: outputRoute) == .speakerProcessed ? .soundIsolation : .none
+    }
 }
 
 enum AudioRecordingError: LocalizedError {
     case noDefaultInputDevice
     case unsupportedFormat
-    case echoCancellationUnavailable(underlying: Error)
 
     var errorDescription: String? {
         switch self {
@@ -406,8 +236,6 @@ enum AudioRecordingError: LocalizedError {
             "Wiretap could not find a default microphone input device."
         case .unsupportedFormat:
             "Wiretap could not start recording from the default microphone."
-        case .echoCancellationUnavailable:
-            "Wiretap could not enable speaker echo cancellation for the current audio route. Choose headphones or try reconnecting the input and output devices."
         }
     }
 }

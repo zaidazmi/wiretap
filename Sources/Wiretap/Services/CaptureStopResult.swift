@@ -5,10 +5,16 @@ struct CaptureStopResult {
     var capturedFrameCount: Int64 = 0
     var droppedFrameCount: Int64 = 0
     var writeError: Error?
+    var microphonePostProcessing: MicrophonePostProcessing = .none
 
     var didCaptureFrames: Bool {
         capturedFrameCount > 0
     }
+}
+
+enum MicrophonePostProcessing: String, Sendable, Equatable {
+    case none
+    case soundIsolation
 }
 
 enum CaptureDropRecoveryPolicy {

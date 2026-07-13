@@ -16,7 +16,11 @@ struct AudioMixerWriter {
 
     func mix(inputs: [AudioMixerInput], outputURL: URL) async throws -> AudioMixResult {
         logger.info("Mix requested inputs=\(inputs.count, privacy: .public) output=\(outputURL.lastPathComponent, privacy: .public)")
-        let usableInputs = try await usableInputs(from: inputs)
+        let prepared = try prepareInputs(inputs, beside: outputURL)
+        defer {
+            prepared.temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+        }
+        let usableInputs = try await usableInputs(from: prepared.inputs)
         guard !usableInputs.isEmpty else {
             logger.error("Mix failed: no usable audio inputs")
             throw RecordingLibraryError.missingFile
@@ -50,6 +54,46 @@ struct AudioMixerWriter {
             duration: renderedDuration,
             sources: sources
         )
+    }
+
+    private func prepareInputs(
+        _ inputs: [AudioMixerInput],
+        beside outputURL: URL
+    ) throws -> (inputs: [AudioMixerInput], temporaryURLs: [URL]) {
+        var preparedInputs: [AudioMixerInput] = []
+        var temporaryURLs: [URL] = []
+        var completed = false
+        defer {
+            if !completed {
+                temporaryURLs.forEach { try? FileManager.default.removeItem(at: $0) }
+            }
+        }
+
+        for input in inputs {
+            switch input.microphonePostProcessing {
+            case .none:
+                preparedInputs.append(input)
+            case .soundIsolation:
+                let processedURL = outputURL.deletingLastPathComponent().appendingPathComponent(
+                    ".wiretap-mic-processed-\(UUID().uuidString).caf"
+                )
+                temporaryURLs.append(processedURL)
+                let result = try OfflineMicrophoneProcessor().applySoundIsolation(
+                    inputURL: input.url,
+                    outputURL: processedURL
+                )
+                logger.info(
+                    "Microphone post-processing=sound-isolation rawPeak=\(result.rawMetrics.peak, privacy: .public) rawRMS=\(result.rawMetrics.rootMeanSquare, privacy: .public) rawNonzero=\(result.rawMetrics.nonzeroSampleCount, privacy: .public)/\(result.rawMetrics.sampleCount, privacy: .public) processedPeak=\(result.processedMetrics.peak, privacy: .public) processedRMS=\(result.processedMetrics.rootMeanSquare, privacy: .public) processedNonzero=\(result.processedMetrics.nonzeroSampleCount, privacy: .public)/\(result.processedMetrics.sampleCount, privacy: .public)"
+                )
+                var processedInput = input
+                processedInput.url = processedURL
+                processedInput.microphonePostProcessing = .none
+                preparedInputs.append(processedInput)
+            }
+        }
+
+        completed = true
+        return (preparedInputs, temporaryURLs)
     }
 
     private func usableInputs(from inputs: [AudioMixerInput]) async throws -> [UsableAudioInput] {
@@ -268,17 +312,20 @@ struct AudioMixerInput: Sendable, Equatable {
     var source: RecordingSource
     var startOffset: TimeInterval
     var targetDuration: TimeInterval?
+    var microphonePostProcessing: MicrophonePostProcessing
 
     init(
         url: URL,
         source: RecordingSource,
         startOffset: TimeInterval = 0,
-        targetDuration: TimeInterval? = nil
+        targetDuration: TimeInterval? = nil,
+        microphonePostProcessing: MicrophonePostProcessing = .none
     ) {
         self.url = url
         self.source = source
         self.startOffset = max(0, startOffset)
         self.targetDuration = targetDuration.map { max(0, $0) }
+        self.microphonePostProcessing = microphonePostProcessing
     }
 }
 

@@ -967,7 +967,8 @@ final class WiretapStore {
                 systemAudioURL: systemAudioURL,
                 captureSources: capturedSources,
                 sourceStartDates: sourceStartDates,
-                duration: duration
+                duration: duration,
+                microphonePostProcessing: microphoneResult.microphonePostProcessing
             )
 
             Task {
@@ -1264,7 +1265,8 @@ private extension WiretapStore {
         systemAudioURL: URL,
         captureSources: Set<RecordingSource>,
         sourceStartDates: [RecordingSource: Date],
-        duration: TimeInterval
+        duration: TimeInterval,
+        microphonePostProcessing: MicrophonePostProcessing = .none
     ) -> [AudioMixerInput] {
         let referenceStartDate = sourceStartDates
             .filter { captureSources.contains($0.key) }
@@ -1307,7 +1309,8 @@ private extension WiretapStore {
                         sessionDuration: duration,
                         sourceStartDates: sourceStartDates,
                         referenceDate: referenceStartDate
-                    )
+                    ),
+                    microphonePostProcessing: microphonePostProcessing
                 )
             )
         }

@@ -1,5 +1,4 @@
 import CoreAudio
-import AVFAudio
 @testable import Wiretap
 import XCTest
 
@@ -12,6 +11,7 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(MicrophoneCapturePolicy.mode(for: route), .speakerProcessed)
+        XCTAssertEqual(MicrophoneCapturePolicy.postProcessing(for: route), .soundIsolation)
     }
 
     func testBluetoothOutputKeepsRawCapture() {
@@ -22,6 +22,7 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(MicrophoneCapturePolicy.mode(for: route), .raw)
+        XCTAssertEqual(MicrophoneCapturePolicy.postProcessing(for: route), .none)
     }
 
     func testHeadphoneTerminalUsesRawCaptureWithoutLocalizedNameMatching() {
@@ -45,19 +46,21 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
 
     func testUnknownOutputRequiresSpeakerProcessing() {
         XCTAssertEqual(MicrophoneCapturePolicy.mode(for: nil), .speakerProcessed)
+        XCTAssertEqual(MicrophoneCapturePolicy.postProcessing(for: nil), .soundIsolation)
     }
 
-    func testSpeakerProcessingDownmixesBuiltInMicrophoneArrayToMono() throws {
-        let captureFormat = try XCTUnwrap(
-            MicrophoneProcessingFormat.captureFormat(
-                sampleRate: 48_000,
-                hardwareChannelCount: 9
-            )
+    func testFormatObserverCoversVoiceChatChannelAndRateChanges() {
+        let selectors = Set(AudioDeviceFormatObserver.devicePropertyAddresses.map(\.mSelector))
+
+        XCTAssertTrue(selectors.contains(kAudioDevicePropertyNominalSampleRate))
+        XCTAssertTrue(selectors.contains(kAudioDevicePropertyActualSampleRate))
+        XCTAssertTrue(selectors.contains(kAudioDevicePropertyStreams))
+        XCTAssertTrue(selectors.contains(kAudioDevicePropertyStreamConfiguration))
+        XCTAssertTrue(selectors.contains(kAudioDevicePropertyDeviceHasChanged))
+        XCTAssertEqual(
+            AudioDeviceFormatObserver.streamVirtualFormatAddress.mSelector,
+            kAudioStreamPropertyVirtualFormat
         )
-
-        XCTAssertEqual(captureFormat.sampleRate, 48_000)
-        XCTAssertEqual(captureFormat.channelCount, 1)
-        XCTAssertEqual(captureFormat.commonFormat, .pcmFormatFloat32)
-        XCTAssertFalse(captureFormat.isInterleaved)
     }
+
 }

@@ -51,6 +51,47 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertEqual(channels[1][1], -0.95, accuracy: 0.001)
     }
 
+    func testPrimaryChannelExtractionDoesNotCancelPhaseOpposedMicrophoneArray() throws {
+        let inputURL = temporaryDirectory.appendingPathComponent("three-channel-microphone.caf")
+        let outputURL = temporaryDirectory.appendingPathComponent("primary-microphone.caf")
+        try writePhaseOpposedArrayTone(to: inputURL, duration: 0.2)
+
+        let metrics = try OfflineMicrophoneProcessor().extractPrimaryChannel(
+            inputURL: inputURL,
+            outputURL: outputURL
+        )
+
+        let outputFile = try AVAudioFile(forReading: outputURL)
+        XCTAssertEqual(outputFile.processingFormat.channelCount, 1)
+        XCTAssertEqual(outputFile.length, 9_600)
+        XCTAssertGreaterThan(metrics.peak, 0.15)
+        XCTAssertGreaterThan(metrics.rootMeanSquare, 0.10)
+        XCTAssertGreaterThan(metrics.nonzeroSampleCount, 9_000)
+    }
+
+    func testOfflineSoundIsolationPreservesSourceDuration() throws {
+        let inputURL = temporaryDirectory.appendingPathComponent("speaker-microphone.caf")
+        let outputURL = temporaryDirectory.appendingPathComponent("isolated-microphone.caf")
+        try writeTone(
+            to: inputURL,
+            duration: 0.2,
+            frequency: 180,
+            amplitude: 0.2,
+            channelCount: 1
+        )
+
+        let result = try OfflineMicrophoneProcessor().applySoundIsolation(
+            inputURL: inputURL,
+            outputURL: outputURL
+        )
+
+        let outputFile = try AVAudioFile(forReading: outputURL)
+        XCTAssertEqual(outputFile.processingFormat.channelCount, 1)
+        XCTAssertEqual(outputFile.length, 9_600)
+        XCTAssertEqual(result.rawMetrics.sampleCount, 9_600)
+        XCTAssertEqual(result.processedMetrics.sampleCount, 9_600)
+    }
+
     func testMixCombinesSourcesIntoSingleM4A() async throws {
         let systemURL = temporaryDirectory.appendingPathComponent("system.caf")
         let micURL = temporaryDirectory.appendingPathComponent("microphone.caf")
@@ -341,6 +382,45 @@ final class AudioMixerWriterTests: XCTestCase {
             settings: settings,
             commonFormat: format.commonFormat,
             interleaved: format.isInterleaved
+        )
+        try file.write(from: buffer)
+    }
+
+    private func writePhaseOpposedArrayTone(to url: URL, duration: TimeInterval) throws {
+        let sampleRate = 48_000.0
+        let layoutTag = kAudioChannelLayoutTag_DiscreteInOrder | 3
+        guard let layout = AVAudioChannelLayout(layoutTag: layoutTag) else {
+            XCTFail("Could not create microphone-array test format")
+            return
+        }
+        let format = AVAudioFormat(
+            standardFormatWithSampleRate: sampleRate,
+            channelLayout: layout
+        )
+        let frameCount = AVAudioFrameCount(sampleRate * duration)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
+              let channels = buffer.floatChannelData
+        else {
+            XCTFail("Could not create microphone-array test buffer")
+            return
+        }
+        buffer.frameLength = frameCount
+
+        for frame in 0..<Int(frameCount) {
+            let sample = Float(sin(2 * Double.pi * 330 * Double(frame) / sampleRate) * 0.2)
+            channels[0][frame] = sample
+            channels[1][frame] = -sample
+            channels[2][frame] = 0
+        }
+
+        var settings = format.settings
+        settings[AVFormatIDKey] = Int(kAudioFormatLinearPCM)
+        settings[AVLinearPCMIsNonInterleaved] = false
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
         )
         try file.write(from: buffer)
     }

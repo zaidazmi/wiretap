@@ -10,6 +10,7 @@ import Foundation
 /// nominal sample rate and input-stream list directly.
 final class AudioDeviceFormatObserver {
     private struct Registration {
+        var objectID: AudioObjectID
         var address: AudioObjectPropertyAddress
         let block: AudioObjectPropertyListenerBlock
     }
@@ -30,9 +31,42 @@ final class AudioDeviceFormatObserver {
         stop()
         self.deviceID = deviceID
 
-        let addresses = [
+        for address in Self.devicePropertyAddresses {
+            addRegistration(objectID: deviceID, address: address, onChange: onChange)
+        }
+
+        for streamID in inputStreamIDs(for: deviceID) {
+            addRegistration(
+                objectID: streamID,
+                address: Self.streamVirtualFormatAddress,
+                onChange: onChange
+            )
+        }
+    }
+
+    func stop() {
+        for registration in registrations {
+            var address = registration.address
+            AudioObjectRemovePropertyListenerBlock(
+                registration.objectID,
+                &address,
+                queue,
+                registration.block
+            )
+        }
+        registrations.removeAll()
+        deviceID = nil
+    }
+
+    static var devicePropertyAddresses: [AudioObjectPropertyAddress] {
+        [
             AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyNominalSampleRate,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            ),
+            AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyActualSampleRate,
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain
             ),
@@ -40,28 +74,75 @@ final class AudioDeviceFormatObserver {
                 mSelector: kAudioDevicePropertyStreams,
                 mScope: kAudioObjectPropertyScopeInput,
                 mElement: kAudioObjectPropertyElementMain
+            ),
+            AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioObjectPropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            ),
+            AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceHasChanged,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
             )
         ]
+    }
 
-        for var address in addresses {
-            let block: AudioObjectPropertyListenerBlock = { _, _ in
-                onChange()
-            }
-            let status = AudioObjectAddPropertyListenerBlock(deviceID, &address, queue, block)
-            if status == noErr {
-                registrations.append(Registration(address: address, block: block))
-            }
+    static var streamVirtualFormatAddress: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioStreamPropertyVirtualFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    private func addRegistration(
+        objectID: AudioObjectID,
+        address: AudioObjectPropertyAddress,
+        onChange: @escaping () -> Void
+    ) {
+        var mutableAddress = address
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            onChange()
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            objectID,
+            &mutableAddress,
+            queue,
+            block
+        )
+        if status == noErr {
+            registrations.append(
+                Registration(objectID: objectID, address: mutableAddress, block: block)
+            )
         }
     }
 
-    func stop() {
-        if let deviceID {
-            for registration in registrations {
-                var address = registration.address
-                AudioObjectRemovePropertyListenerBlock(deviceID, &address, queue, registration.block)
-            }
+    private func inputStreamIDs(for deviceID: AudioObjectID) -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &dataSize) == noErr,
+              dataSize >= UInt32(MemoryLayout<AudioObjectID>.size)
+        else { return [] }
+
+        var streams = [AudioObjectID](
+            repeating: kAudioObjectUnknown,
+            count: Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        )
+        let status = streams.withUnsafeMutableBytes { bytes in
+            AudioObjectGetPropertyData(
+                deviceID,
+                &address,
+                0,
+                nil,
+                &dataSize,
+                bytes.baseAddress!
+            )
         }
-        registrations.removeAll()
-        deviceID = nil
+        return status == noErr ? streams : []
     }
 }

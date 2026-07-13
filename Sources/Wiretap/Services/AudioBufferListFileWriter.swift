@@ -25,6 +25,7 @@ final class AudioBufferListFileWriter {
     init(
         outputURL: URL,
         inputFormat: AVAudioFormat,
+        channelMapping: CaptureChannelMapping = .automatic,
         // VoiceProcessingIO normally delivers 512-frame buffers. Keep more than
         // one second of reusable headroom so a short disk or scheduler stall
         // cannot force the real-time callback to drop microphone audio.
@@ -37,12 +38,16 @@ final class AudioBufferListFileWriter {
         let outputSettings = Self.linearPCMSettings(for: inputFormat)
 
         self.currentInputFormat = inputFormat
-        self.state = WriteState(audioFile: try AVAudioFile(
-            forWriting: outputURL,
-            settings: outputSettings,
-            commonFormat: inputFormat.commonFormat,
-            interleaved: inputFormat.isInterleaved
-        ), writeBuffer: writeBuffer)
+        self.state = WriteState(
+            audioFile: try AVAudioFile(
+                forWriting: outputURL,
+                settings: outputSettings,
+                commonFormat: inputFormat.commonFormat,
+                interleaved: inputFormat.isInterleaved
+            ),
+            channelMapping: channelMapping,
+            writeBuffer: writeBuffer
+        )
         self.bufferPoolSize = bufferPoolSize
         self.pooledFrameCapacity = pooledFrameCapacity
         self.currentBufferPool = AudioPCMBufferPool(
@@ -255,6 +260,11 @@ final class AudioBufferListFileWriter {
     }
 }
 
+enum CaptureChannelMapping: Sendable, Equatable {
+    case automatic
+    case primaryInput
+}
+
 private func audioFormatsMatch(_ lhs: AVAudioFormat, _ rhs: AVAudioFormat) -> Bool {
     lhs.sampleRate == rhs.sampleRate
         && lhs.channelCount == rhs.channelCount
@@ -337,6 +347,7 @@ private final class AudioPCMBufferPool: @unchecked Sendable {
 private final class WriteState: @unchecked Sendable {
     private let audioFile: AVAudioFile
     private let writeBuffer: (AVAudioFile, AVAudioPCMBuffer) throws -> Void
+    private let channelMapping: CaptureChannelMapping
     private let lock = NSLock()
     private var storedWriteError: Error?
     private var storedCapturedFrameCount: Int64 = 0
@@ -346,9 +357,11 @@ private final class WriteState: @unchecked Sendable {
 
     init(
         audioFile: AVAudioFile,
+        channelMapping: CaptureChannelMapping,
         writeBuffer: @escaping (AVAudioFile, AVAudioPCMBuffer) throws -> Void
     ) {
         self.audioFile = audioFile
+        self.channelMapping = channelMapping
         self.writeBuffer = writeBuffer
     }
 
@@ -456,6 +469,11 @@ private final class WriteState: @unchecked Sendable {
         }
         if converter == nil {
             converter = AVAudioConverter(from: buffer.format, to: targetFormat)
+            configureChannelMapping(
+                converter,
+                inputFormat: buffer.format,
+                outputFormat: targetFormat
+            )
         }
         guard let converter else {
             throw AudioBufferListFileWriterError.formatConversionFailed
@@ -501,6 +519,20 @@ private final class WriteState: @unchecked Sendable {
                 throw AudioBufferListFileWriterError.formatConversionFailed
             }
         }
+    }
+
+    private func configureChannelMapping(
+        _ converter: AVAudioConverter?,
+        inputFormat: AVAudioFormat,
+        outputFormat: AVAudioFormat
+    ) {
+        guard channelMapping == .primaryInput,
+              inputFormat.channelCount > 0,
+              inputFormat.channelCount != outputFormat.channelCount
+        else { return }
+
+        converter?.channelMap = Array(repeating: 0, count: Int(outputFormat.channelCount))
+        converter?.downmix = false
     }
 
     func recordDroppedFrames(_ frameCount: AVAudioFrameCount, error: Error) {

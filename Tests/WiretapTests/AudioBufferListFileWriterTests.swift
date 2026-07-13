@@ -293,6 +293,51 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(duration, 0.5, accuracy: 0.05)
     }
 
+    func testPrimaryInputMappingSurvivesMonoToMultichannelVoiceChatChange() throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("voice-chat-format-change.caf")
+        let monoFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let stereoFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makePhaseOpposedBuffer(format: stereoFormat, duration: 0.2)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: monoFormat,
+            channelMapping: .primaryInput
+        )
+
+        writer?.updateInputFormat(stereoFormat)
+        writer?.write(inputData: buffer.audioBufferList)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        let file = try AVAudioFile(
+            forReading: outputURL,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        let output = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: file.processingFormat,
+            frameCapacity: AVAudioFrameCount(file.length)
+        ))
+        try file.read(into: output)
+        let samples = try XCTUnwrap(output.floatChannelData?[0])
+        var peak: Float = 0
+        for frame in 0..<Int(output.frameLength) {
+            peak = max(peak, abs(samples[frame]))
+        }
+        XCTAssertGreaterThan(peak, 0.20)
+    }
+
     func testSampleTimeGapIsFilledWithSilence() async throws {
         let outputURL = temporaryDirectory.appendingPathComponent("gap-fill.caf")
         let format = try XCTUnwrap(AVAudioFormat(
@@ -421,6 +466,18 @@ final class AudioBufferListFileWriterTests: XCTestCase {
             }
         }
 
+        return buffer
+    }
+
+    private func makePhaseOpposedBuffer(
+        format: AVAudioFormat,
+        duration: TimeInterval
+    ) throws -> AVAudioPCMBuffer {
+        let buffer = try makeToneBuffer(format: format, duration: duration)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for frame in 0..<Int(buffer.frameLength) {
+            channels[1][frame] = -channels[0][frame]
+        }
         return buffer
     }
 }

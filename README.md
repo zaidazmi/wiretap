@@ -26,7 +26,7 @@ Nothing leaves your Mac. The recordings sit on your disk, and what you do with t
 
 ## How it works
 
-Wiretap grabs system audio through ScreenCaptureKit (no virtual audio driver to install) and records the default microphone at the same time. When you're on speakers, it applies voice isolation so the mic track doesn't double up on what's already in the system audio. On headphones or Bluetooth, it skips the processing and captures raw.
+Wiretap grabs system audio through ScreenCaptureKit (no virtual audio driver to install) and records the physical default microphone at the same time. When you're on speakers, it keeps the live capture pinned to that physical device and applies voice isolation during finalization, so VoiceChat apps cannot silently replace or stop the microphone graph. On headphones or Bluetooth, it skips the processing and captures raw.
 
 You can start and stop from the menu bar or hit `Cmd+Shift+R` from anywhere. Recordings go into a built-in library where you can play them back, search, rename, export, or share. If your Mac sleeps mid-recording or the app gets killed, the next launch recovers what it can.
 

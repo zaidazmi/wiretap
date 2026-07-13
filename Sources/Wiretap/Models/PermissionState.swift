@@ -20,7 +20,7 @@ enum PermissionState: Hashable {
         case .ready:
             "Microphone access is ready. System audio permission is checked when recording starts."
         case .denied:
-            "Open System Settings to allow microphone access. System audio may also require Audio Capture approval."
+            "Open System Settings to allow microphone access. System audio may also require Screen & System Audio Recording approval."
         }
     }
 }

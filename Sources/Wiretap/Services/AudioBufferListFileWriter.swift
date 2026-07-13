@@ -3,11 +3,24 @@ import Foundation
 import os.lock
 
 final class AudioBufferListFileWriter {
-    private let inputFormat: AVAudioFormat
     private let state: WriteState
     private let writeQueue: DispatchQueue
     private let writeQueueKey = DispatchSpecificKey<Bool>()
-    private let bufferPool: AudioPCMBufferPool
+    private let bufferPoolSize: Int
+    private let pooledFrameCapacity: AVAudioFrameCount
+    private let logger = WiretapLog.capture
+    private var inputLock = os_unfair_lock_s()
+    private var currentInputFormat: AVAudioFormat
+    private var currentBufferPool: AudioPCMBufferPool
+    // Device sample time expected for the next callback. Process taps deliver
+    // nothing while no app renders audio, so the file timeline must be rebuilt
+    // by filling those gaps with silence.
+    private var expectedNextSampleTime: Float64?
+
+    // Skip filling sub-threshold gaps (timestamp jitter); ignore absurd jumps
+    // that indicate a clock-domain reset rather than real silence.
+    private static let minimumGapFrames: Float64 = 512
+    private static let maximumGapSeconds: Float64 = 6 * 60 * 60
 
     init(
         outputURL: URL,
@@ -20,14 +33,16 @@ final class AudioBufferListFileWriter {
     ) throws {
         let outputSettings = Self.linearPCMSettings(for: inputFormat)
 
-        self.inputFormat = inputFormat
+        self.currentInputFormat = inputFormat
         self.state = WriteState(audioFile: try AVAudioFile(
             forWriting: outputURL,
             settings: outputSettings,
             commonFormat: inputFormat.commonFormat,
             interleaved: inputFormat.isInterleaved
         ), writeBuffer: writeBuffer)
-        self.bufferPool = AudioPCMBufferPool(
+        self.bufferPoolSize = bufferPoolSize
+        self.pooledFrameCapacity = pooledFrameCapacity
+        self.currentBufferPool = AudioPCMBufferPool(
             format: inputFormat,
             capacity: bufferPoolSize,
             frameCapacity: pooledFrameCapacity
@@ -47,9 +62,61 @@ final class AudioBufferListFileWriter {
         state.capturedFrameCount
     }
 
+    /// Re-interpret subsequent `write(inputData:)` calls with a new stream format.
+    /// Devices can change sample rate mid-capture (a Bluetooth headset dropping
+    /// from A2DP to HFP when its microphone activates); buffers that no longer
+    /// match the file's format are resampled before writing so the file keeps
+    /// playing at the correct speed.
+    func updateInputFormat(_ newFormat: AVAudioFormat) {
+        os_unfair_lock_lock(&inputLock)
+        let previousFormat = currentInputFormat
+        os_unfair_lock_unlock(&inputLock)
+        guard !audioFormatsMatch(previousFormat, newFormat) else { return }
+
+        let newPool = AudioPCMBufferPool(
+            format: newFormat,
+            capacity: bufferPoolSize,
+            frameCapacity: pooledFrameCapacity
+        )
+        os_unfair_lock_lock(&inputLock)
+        currentInputFormat = newFormat
+        currentBufferPool = newPool
+        // Sample-time values belong to the old clock domain after a rate
+        // change; re-anchor on the next callback instead of filling a gap.
+        expectedNextSampleTime = nil
+        os_unfair_lock_unlock(&inputLock)
+        logger.info(
+            "Capture input format changed from=\(WiretapLog.audioFormatSummary(previousFormat), privacy: .public) to=\(WiretapLog.audioFormatSummary(newFormat), privacy: .public); converting to keep file format"
+        )
+    }
+
+    func write(buffer: AVAudioPCMBuffer, sampleTime: Float64? = nil) {
+        updateInputFormat(buffer.format)
+        write(inputData: buffer.audioBufferList, sampleTime: sampleTime)
+    }
+
     func write(inputData: UnsafePointer<AudioBufferList>) {
-        switch copiedBuffer(from: inputData) {
+        write(inputData: inputData, sampleTime: nil)
+    }
+
+    func write(inputData: UnsafePointer<AudioBufferList>, sampleTime: Float64?) {
+        os_unfair_lock_lock(&inputLock)
+        let inputFormat = currentInputFormat
+        let bufferPool = currentBufferPool
+        os_unfair_lock_unlock(&inputLock)
+
+        switch copiedBuffer(from: inputData, inputFormat: inputFormat, bufferPool: bufferPool) {
         case let .success(pendingBuffer):
+            let silenceFrames = advanceTimeline(
+                to: sampleTime,
+                frameLength: pendingBuffer.buffer.frameLength,
+                sampleRate: inputFormat.sampleRate
+            )
+            if silenceFrames > 0 {
+                writeQueue.async { [state] in
+                    state.writeSilence(frameCount: silenceFrames, format: inputFormat)
+                }
+            }
             writeQueue.async { [state, pendingBuffer] in
                 defer { pendingBuffer.recycle() }
                 state.write(pendingBuffer.buffer)
@@ -57,21 +124,64 @@ final class AudioBufferListFileWriter {
         case let .failure(failure):
             state.recordDroppedFrames(failure.frameCount, error: failure.error)
         case nil:
+            // No usable audio in this cycle; anchor the timeline so the gap
+            // until the first real buffer can be measured and filled.
+            anchorTimelineIfNeeded(at: sampleTime)
             return
         }
+    }
+
+    /// Returns how many silence frames must be written before the current
+    /// buffer to keep the file aligned with the device clock.
+    private func advanceTimeline(
+        to sampleTime: Float64?,
+        frameLength: AVAudioFrameCount,
+        sampleRate: Double
+    ) -> Int64 {
+        guard let sampleTime else { return 0 }
+
+        os_unfair_lock_lock(&inputLock)
+        defer { os_unfair_lock_unlock(&inputLock) }
+
+        let expected = expectedNextSampleTime
+        expectedNextSampleTime = sampleTime + Float64(frameLength)
+
+        guard let expected else { return 0 }
+
+        let gap = sampleTime - expected
+        guard gap >= Self.minimumGapFrames,
+              gap <= Self.maximumGapSeconds * sampleRate
+        else { return 0 }
+
+        return Int64(gap)
+    }
+
+    private func anchorTimelineIfNeeded(at sampleTime: Float64?) {
+        guard let sampleTime else { return }
+
+        os_unfair_lock_lock(&inputLock)
+        if expectedNextSampleTime == nil {
+            expectedNextSampleTime = sampleTime
+        }
+        os_unfair_lock_unlock(&inputLock)
     }
 
     @discardableResult
     func flush() -> AudioFileWriterFlushResult {
         guard DispatchQueue.getSpecific(key: writeQueueKey) != true else {
+            state.finishConversion()
             return state.flushResult
         }
 
-        writeQueue.sync {}
+        writeQueue.sync { state.finishConversion() }
         return state.flushResult
     }
 
-    private func copiedBuffer(from inputData: UnsafePointer<AudioBufferList>) -> PendingAudioBufferResult? {
+    private func copiedBuffer(
+        from inputData: UnsafePointer<AudioBufferList>,
+        inputFormat: AVAudioFormat,
+        bufferPool: AudioPCMBufferPool
+    ) -> PendingAudioBufferResult? {
         guard let sourceBuffer = AVAudioPCMBuffer(
             pcmFormat: inputFormat,
             bufferListNoCopy: inputData,
@@ -142,6 +252,13 @@ final class AudioBufferListFileWriter {
     }
 }
 
+private func audioFormatsMatch(_ lhs: AVAudioFormat, _ rhs: AVAudioFormat) -> Bool {
+    lhs.sampleRate == rhs.sampleRate
+        && lhs.channelCount == rhs.channelCount
+        && lhs.commonFormat == rhs.commonFormat
+        && lhs.isInterleaved == rhs.isInterleaved
+}
+
 private enum PendingAudioBufferResult {
     case success(PendingAudioBuffer)
     case failure(PendingAudioBufferFailure)
@@ -161,6 +278,7 @@ struct AudioFileWriterFlushResult {
 enum AudioBufferListFileWriterError: LocalizedError {
     case bufferPoolExhausted(frameCount: AVAudioFrameCount)
     case bufferExceedsPoolCapacity(frameCount: AVAudioFrameCount, capacity: AVAudioFrameCount)
+    case formatConversionFailed
 
     var errorDescription: String? {
         switch self {
@@ -168,6 +286,8 @@ enum AudioBufferListFileWriterError: LocalizedError {
             "Wiretap dropped \(frameCount) audio frames because the capture buffer pool was exhausted."
         case let .bufferExceedsPoolCapacity(frameCount, capacity):
             "Wiretap dropped \(frameCount) audio frames because the capture buffer exceeded the pool capacity of \(capacity) frames."
+        case .formatConversionFailed:
+            "Wiretap could not convert captured audio to the recording's file format."
         }
     }
 }
@@ -218,6 +338,8 @@ private final class WriteState: @unchecked Sendable {
     private var storedWriteError: Error?
     private var storedCapturedFrameCount: Int64 = 0
     private var storedDroppedFrameCount: Int64 = 0
+    // Only touched from the serial write queue.
+    private var converter: AVAudioConverter?
 
     init(
         audioFile: AVAudioFile,
@@ -247,9 +369,134 @@ private final class WriteState: @unchecked Sendable {
         recordCapturedFrames(buffer.frameLength)
 
         do {
-            try writeBuffer(audioFile, buffer)
+            if audioFormatsMatch(buffer.format, audioFile.processingFormat) {
+                try writeBuffer(audioFile, buffer)
+            } else {
+                try writeConverted(buffer)
+            }
         } catch {
             recordWriteError(error)
+        }
+    }
+
+    func writeSilence(frameCount: Int64, format: AVAudioFormat) {
+        let chunkCapacity: AVAudioFrameCount = 16_384
+        guard frameCount > 0,
+              let silenceBuffer = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: chunkCapacity
+              )
+        else { return }
+
+        let silenceBuffers = UnsafeMutableAudioBufferListPointer(
+            silenceBuffer.mutableAudioBufferList
+        )
+
+        var remaining = frameCount
+        while remaining > 0 {
+            let chunk = AVAudioFrameCount(min(remaining, Int64(chunkCapacity)))
+            silenceBuffer.frameLength = chunk
+            for buffer in silenceBuffers {
+                guard let data = buffer.mData else { continue }
+                memset(data, 0, Int(buffer.mDataByteSize))
+            }
+            write(silenceBuffer)
+            remaining -= Int64(chunk)
+        }
+    }
+
+    // The converter pipelines internally and holds back output until more
+    // input arrives; drain it at the end so the file keeps its tail.
+    func finishConversion() {
+        guard let converter else { return }
+        self.converter = nil
+
+        let targetFormat = audioFile.processingFormat
+        do {
+            while true {
+                guard let output = AVAudioPCMBuffer(
+                    pcmFormat: targetFormat,
+                    frameCapacity: 8_192
+                ) else { return }
+
+                var conversionError: NSError?
+                let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+                    inputStatus.pointee = .endOfStream
+                    return nil
+                }
+
+                switch status {
+                case .haveData:
+                    if output.frameLength > 0 {
+                        try writeBuffer(audioFile, output)
+                    }
+                case .inputRanDry, .endOfStream:
+                    if output.frameLength > 0 {
+                        try writeBuffer(audioFile, output)
+                    }
+                    return
+                case .error:
+                    throw conversionError ?? AudioBufferListFileWriterError.formatConversionFailed
+                @unknown default:
+                    return
+                }
+            }
+        } catch {
+            recordWriteError(error)
+        }
+    }
+
+    private func writeConverted(_ buffer: AVAudioPCMBuffer) throws {
+        let targetFormat = audioFile.processingFormat
+        if let converter, !audioFormatsMatch(converter.inputFormat, buffer.format) {
+            self.converter = nil
+        }
+        if converter == nil {
+            converter = AVAudioConverter(from: buffer.format, to: targetFormat)
+        }
+        guard let converter else {
+            throw AudioBufferListFileWriterError.formatConversionFailed
+        }
+
+        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 64
+        let feed = ConverterFeed(buffer: buffer)
+
+        while true {
+            guard let output = AVAudioPCMBuffer(
+                pcmFormat: targetFormat,
+                frameCapacity: capacity
+            ) else {
+                throw AudioBufferListFileWriterError.formatConversionFailed
+            }
+
+            var conversionError: NSError?
+            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+                guard let next = feed.take() else {
+                    inputStatus.pointee = .noDataNow
+                    return nil
+                }
+                inputStatus.pointee = .haveData
+                return next
+            }
+
+            switch status {
+            case .haveData:
+                if output.frameLength > 0 {
+                    try writeBuffer(audioFile, output)
+                }
+            case .inputRanDry:
+                if output.frameLength > 0 {
+                    try writeBuffer(audioFile, output)
+                }
+                return
+            case .endOfStream:
+                return
+            case .error:
+                throw conversionError ?? AudioBufferListFileWriterError.formatConversionFailed
+            @unknown default:
+                throw AudioBufferListFileWriterError.formatConversionFailed
+            }
         }
     }
 
@@ -275,6 +522,21 @@ private final class WriteState: @unchecked Sendable {
             storedWriteError = error
         }
         lock.unlock()
+    }
+}
+
+// Hands the single pending buffer to the converter's input block exactly once.
+// The block runs synchronously inside convert(), but is typed @Sendable.
+private final class ConverterFeed: @unchecked Sendable {
+    private var buffer: AVAudioPCMBuffer?
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func take() -> AVAudioPCMBuffer? {
+        defer { buffer = nil }
+        return buffer
     }
 }
 

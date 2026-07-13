@@ -216,6 +216,143 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(result.droppedFrameCount, 0)
     }
 
+    func testInputFormatChangeMidStreamKeepsFileDuration() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("format-change.caf")
+        let fileFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let loweredFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 2,
+            interleaved: true
+        ))
+        let originalBuffer = try makeToneBuffer(format: fileFormat, duration: 0.25)
+        let loweredBuffer = try makeToneBuffer(format: loweredFormat, duration: 0.25)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: fileFormat
+        )
+
+        writer?.write(inputData: originalBuffer.audioBufferList)
+        writer?.updateInputFormat(loweredFormat)
+        writer?.write(inputData: loweredBuffer.audioBufferList)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        XCTAssertEqual(
+            result?.capturedFrameCount,
+            Int64(originalBuffer.frameLength) + Int64(loweredBuffer.frameLength)
+        )
+
+        // Without conversion, the 16 kHz chunk would occupy only ~0.083 s of a
+        // 48 kHz file and play back sped up; converted, the total stays ~0.5 s.
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.5, accuracy: 0.05)
+    }
+
+    func testSampleTimeGapIsFilledWithSilence() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("gap-fill.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.1)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        // 0.1 s of audio, a 0.3 s silent hole in the device timeline, then
+        // another 0.1 s of audio: the file must span 0.5 s, not 0.2 s.
+        writer?.write(inputData: buffer.audioBufferList, sampleTime: 0)
+        writer?.write(
+            inputData: buffer.audioBufferList,
+            sampleTime: Float64(buffer.frameLength) + 0.3 * format.sampleRate
+        )
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.5, accuracy: 0.02)
+    }
+
+    func testEmptyCallbackAnchorsTimelineForLeadingSilence() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("leading-gap.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.1)
+        var emptyBufferList = AudioBufferList(
+            mNumberBuffers: 1,
+            mBuffers: AudioBuffer(mNumberChannels: 2, mDataByteSize: 0, mData: nil)
+        )
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        // An empty cycle at sample time 0 anchors the timeline; audio arriving
+        // at 0.4 s must be preceded by 0.4 s of silence in the file.
+        withUnsafePointer(to: &emptyBufferList) { pointer in
+            writer?.write(inputData: pointer, sampleTime: 0)
+        }
+        writer?.write(inputData: buffer.audioBufferList, sampleTime: 0.4 * format.sampleRate)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.5, accuracy: 0.02)
+    }
+
+    func testWritePCMBufferAdoptsBufferFormat() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("buffer-format-adoption.caf")
+        let fileFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let deliveredFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 24_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let deliveredBuffer = try makeToneBuffer(format: deliveredFormat, duration: 0.5)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: fileFormat
+        )
+
+        writer?.write(buffer: deliveredBuffer)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        XCTAssertEqual(result?.capturedFrameCount, Int64(deliveredBuffer.frameLength))
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.5, accuracy: 0.05)
+    }
+
     private func makeToneBuffer(
         format: AVAudioFormat,
         duration: TimeInterval,

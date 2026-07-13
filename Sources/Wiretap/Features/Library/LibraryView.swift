@@ -33,7 +33,6 @@ struct LibraryView: View {
                     EmptyLibraryView(
                         isFiltering: !store.searchText.isEmpty,
                         canRecord: store.canRecord,
-                        captureMode: store.captureMode,
                         onRecord: { store.startRecording() },
                         onReviewPermissions: { store.isOnboardingPresented = true },
                         onClearSearch: { store.searchText = "" }
@@ -199,13 +198,6 @@ private struct LibraryStatusStrip: View {
             }
 
             Spacer()
-
-            CaptureModePicker(
-                selection: $store.captureMode,
-                isDisabled: store.isRecording,
-                accessibilityIdentifier: WiretapAccessibility.Library.captureModePicker
-            )
-            .frame(width: 310)
 
             LibraryMetric(title: "Elapsed", value: "00:00")
             LibraryMetric(title: "Recordings", value: "\(store.recordings.count)")

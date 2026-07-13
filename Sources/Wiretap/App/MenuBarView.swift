@@ -207,80 +207,18 @@ private struct MenuCaptureSources: View {
     @Bindable var store: WiretapStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Capture")
-                .font(.subheadline.weight(.semibold))
-
-            CaptureModePicker(
-                selection: $store.captureMode,
-                isDisabled: store.isRecording,
-                accessibilityIdentifier: WiretapAccessibility.MenuBar.captureModePicker
-            )
-
-            SourceRow(
-                title: "System audio",
-                systemImage: "speaker.wave.2.fill",
-                state: store.systemAudioState,
-                identifier: WiretapAccessibility.MenuBar.systemAudioSource
-            )
-            SourceRow(
-                title: "Default microphone",
-                systemImage: "mic.fill",
-                state: store.microphoneState,
-                identifier: WiretapAccessibility.MenuBar.microphoneSource
-            )
-
-            HStack {
-                Image(systemName: isPermissionReady ? "checkmark.shield.fill" : "lock.shield")
-                    .foregroundStyle(store.systemAudioState == .unavailable ? .orange : isPermissionReady ? .green : .secondary)
-                Text(store.capturePermissionTitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
+        HStack {
+            Image(systemName: isPermissionReady ? "checkmark.shield.fill" : "lock.shield")
+                .foregroundStyle(store.systemAudioState == .unavailable ? .orange : isPermissionReady ? .green : .secondary)
+            Text(store.capturePermissionTitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
         }
     }
 
     private var isPermissionReady: Bool {
-        !store.captureMode.requiresMicrophone || store.permissionState == .ready
-    }
-}
-
-private struct SourceRow: View {
-    let title: String
-    let systemImage: String
-    let state: CaptureSourceState
-    let identifier: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
-                .frame(width: 20)
-            Text(title)
-                .font(.callout)
-            Spacer()
-            Image(systemName: stateIcon)
-                .foregroundStyle(stateColor)
-                .help(state.label)
-        }
-        .accessibilityIdentifier(identifier)
-    }
-
-    private var stateIcon: String {
-        switch state {
-        case .notChecked: "circle"
-        case .ready: "checkmark.circle.fill"
-        case .unavailable: "exclamationmark.circle.fill"
-        }
-    }
-
-    private var stateColor: Color {
-        switch state {
-        case .notChecked: .secondary
-        case .ready: .green
-        case .unavailable: .orange
-        }
+        store.permissionState == .ready
     }
 }
 

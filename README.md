@@ -2,7 +2,7 @@
 
 Wiretap is a local-first macOS menu bar recorder for system audio plus the current default microphone. It saves one mixed AAC `.m4a` file per recording and keeps an app-managed library for playback, search, rename, reveal, share, export, and delete.
 
-The app is audio-only. It uses Core Audio process taps for system output capture rather than screen recording APIs, and it does not record video, transcribe audio, sync to a cloud service, or install a virtual audio driver.
+The app is audio-only. It uses ScreenCaptureKit for system-output audio without recording video, and it does not transcribe audio, sync to a cloud service, or install a virtual audio driver.
 
 ## Requirements
 
@@ -31,11 +31,22 @@ Scripts/package-dmg.sh debug
 open .build/dist
 ```
 
-By default, local builds are ad-hoc signed. To use Developer ID signing:
+Local builds automatically use the first available Apple Development signing identity so macOS privacy grants survive rebuilds. Machines without a development identity fall back to ad-hoc signing; those builds need privacy access granted again after each rebuild. To select a particular identity or use Developer ID signing:
 
 ```sh
 WIRETAP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" Scripts/package-dmg.sh release
 ```
+
+Set `WIRETAP_SIGN_IDENTITY=-` to force ad-hoc signing.
+
+After switching an existing ad-hoc development build to stable signing, clear its stale Screen Recording entry once, launch the newly built app, grant the upper **Screen Recording** permission, and relaunch Wiretap:
+
+```sh
+tccutil reset ScreenCapture dev.zaidazmi.Wiretap
+open .build/Wiretap.app
+```
+
+The lower **System Audio Recording Only** grant belongs to the older Core Audio tap path and does not satisfy ScreenCaptureKit.
 
 To notarize the DMG, also set `WIRETAP_NOTARIZE=1`, `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD`.
 
@@ -66,9 +77,10 @@ Required repository secrets:
 
 ## Recording Behavior
 
-- Captures all system output audio except Wiretap itself when Core Audio can resolve the current process.
+- Captures the display-wide system-audio mix through ScreenCaptureKit while excluding Wiretap's own playback.
 - Captures the current macOS default input device.
-- Writes source streams to temporary `.m4a` files, then finalizes one 48 kHz stereo AAC `.m4a`.
+- Uses acoustic echo cancellation for speaker output so the microphone track does not add a delayed second copy of system audio. Headphone and Bluetooth routes keep the raw microphone path to preserve fidelity and handle device format renegotiation.
+- Writes source streams losslessly to temporary `.caf` files, then finalizes one 48 kHz stereo AAC `.m4a`.
 - Applies source alignment, silence padding, and peak limiting during offline mixing without pitch-shifting captured audio.
 - Checks available disk space before starting a recording.
 - Stores finished recordings under `Application Support/<bundle-id>/Recordings`.
@@ -91,7 +103,7 @@ For an app-bundle launch smoke:
 Scripts/smoke-app.sh debug
 ```
 
-The current suite covers library persistence, metadata migration, missing-file repair, active-recording recovery, search/rename/delete/reveal/export/share flows, Core Audio permission-error mapping, queued file writes, source alignment, silence padding, duration accuracy, and clipping prevention. The smoke script builds `Wiretap.app`, verifies app metadata and signing, launches the menu bar app, and terminates the launched process.
+The current suite covers library persistence, metadata migration, missing-file repair, active-recording recovery, search/rename/delete/reveal/export/share flows, Core Audio permission-error mapping, microphone route policy, queued file writes, source alignment, silence padding, duration accuracy, and clipping prevention. The smoke script builds `Wiretap.app`, verifies app metadata and signing, launches the menu bar app, and terminates the launched process.
 
 Hardware capture behavior still needs manual verification across speakers, wired headphones, Bluetooth headphones, default input switching, and sleep/wake.
 

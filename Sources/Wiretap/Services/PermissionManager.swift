@@ -80,8 +80,8 @@ enum PrivacySettingsTarget: Hashable {
             ]
         case .systemAudio:
             [
-                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AudioCapture",
-                "x-apple.systempreferences:com.apple.preference.security?Privacy",
+                "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
                 "x-apple.systempreferences:com.apple.preference.security"
             ]
         }

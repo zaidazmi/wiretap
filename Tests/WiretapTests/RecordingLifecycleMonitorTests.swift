@@ -175,6 +175,8 @@ private final class MonitorFakeSystemAudioTap: SystemAudioTapping {
     var capturedFrameCount: Int64 = 48_000
     var stopCallCount = 0
 
+    func prewarm() {}
+
     func start(writingTo outputURL: URL) throws {
         try Data("system".utf8).write(to: outputURL)
         isRunning = true

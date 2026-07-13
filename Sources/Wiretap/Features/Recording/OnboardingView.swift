@@ -14,46 +14,29 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Wiretap")
                         .font(.largeTitle.weight(.semibold))
-                    Text(store.captureMode.onboardingSubtitle)
+                    Text("System output audio and the default microphone.")
                         .foregroundStyle(.secondary)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Capture Mode")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                CaptureModePicker(
-                    selection: $store.captureMode,
-                    isDisabled: store.isRecording,
-                    accessibilityIdentifier: WiretapAccessibility.Onboarding.captureModePicker
-                )
-                .frame(width: 320)
-            }
-
             VStack(alignment: .leading, spacing: 14) {
-                if store.captureMode.requiresSystemAudio {
-                    PermissionRow(
-                        title: "System Audio",
-                        summary: "Captures the audio playing on this Mac. macOS checks Audio Capture permission when recording starts.",
-                        systemImage: "speaker.wave.3.fill",
-                        state: store.systemAudioState,
-                        rowIdentifier: WiretapAccessibility.Onboarding.systemAudioRow,
-                        statusIdentifier: WiretapAccessibility.Onboarding.systemAudioStatus
-                    )
-                }
+                PermissionRow(
+                    title: "System Audio",
+                    summary: "Captures the audio playing on this Mac. macOS asks for Screen & System Audio Recording permission the first time.",
+                    systemImage: "speaker.wave.3.fill",
+                    state: store.systemAudioState,
+                    rowIdentifier: WiretapAccessibility.Onboarding.systemAudioRow,
+                    statusIdentifier: WiretapAccessibility.Onboarding.systemAudioStatus
+                )
 
-                if store.captureMode.requiresMicrophone {
-                    PermissionRow(
-                        title: "Microphone",
-                        summary: "Uses the current macOS default input device.",
-                        systemImage: "mic.fill",
-                        state: store.microphoneState,
-                        rowIdentifier: WiretapAccessibility.Onboarding.microphoneRow,
-                        statusIdentifier: WiretapAccessibility.Onboarding.microphoneStatus
-                    )
-                }
+                PermissionRow(
+                    title: "Microphone",
+                    summary: "Uses the current macOS default input device.",
+                    systemImage: "mic.fill",
+                    state: store.microphoneState,
+                    rowIdentifier: WiretapAccessibility.Onboarding.microphoneRow,
+                    statusIdentifier: WiretapAccessibility.Onboarding.microphoneStatus
+                )
 
                 PermissionRow(
                     title: "Local Files",

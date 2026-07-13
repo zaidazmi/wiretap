@@ -16,6 +16,17 @@ let package = Package(
             path: "Sources/Wiretap",
             resources: [
                 .process("Resources")
+            ],
+            linkerSettings: [
+                // Embed Info.plist into the bare executable so permission-gated
+                // APIs (Audio Capture, microphone) can prompt even when the
+                // binary runs outside the packaged .app bundle.
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/Wiretap/Resources/WiretapInfo.plist"
+                ])
             ]
         ),
         .testTarget(

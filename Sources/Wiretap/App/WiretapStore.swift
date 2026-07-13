@@ -143,7 +143,11 @@ struct MicrophoneRouteInspection: Equatable {
         "soundflower",
         "sound siphon",
         "vb-cable",
-        "ishowu"
+        "ishowu",
+        "wave link",
+        "wavelink",
+        "voicemeeter",
+        "virtual audio"
     ]
 }
 
@@ -195,12 +199,6 @@ final class WiretapStore {
     var playbackDuration: TimeInterval = 0
     var systemAudioState: CaptureSourceState = .notChecked
     var microphoneState: CaptureSourceState = .notChecked
-    var captureMode: RecordingCaptureMode {
-        didSet {
-            guard captureMode != oldValue else { return }
-            captureModeStorage?.save(captureMode)
-        }
-    }
 
     @ObservationIgnored private let repository: RecordingLibraryRepository
     @ObservationIgnored private let microphoneRecorder: any MicrophoneRecording
@@ -210,7 +208,6 @@ final class WiretapStore {
     @ObservationIgnored private let permissionManager: PermissionManager
     @ObservationIgnored private let fileActions: RecordingFileActions
     @ObservationIgnored private let microphoneRouteInspector: MicrophoneRouteInspector
-    @ObservationIgnored private let captureModeStorage: CaptureModeStorage?
     @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
     @ObservationIgnored private let logger = WiretapLog.capture
     @ObservationIgnored private var activeRecordingID: Recording.ID?
@@ -235,14 +232,11 @@ final class WiretapStore {
         permissionManager: PermissionManager = PermissionManager(),
         fileActions: RecordingFileActions = .live,
         microphoneRouteInspector: MicrophoneRouteInspector = .permissive,
-        captureMode: RecordingCaptureMode = .systemAndMicrophone,
-        captureModeStorage: CaptureModeStorage? = nil,
         minimumFreeDiskSpaceBytes: Int64 = 1_000_000_000,
         captureStallThreshold: TimeInterval = 12
     ) {
         self.recordings = recordings
         self.selectedRecordingID = recordings.first?.id
-        self.captureMode = captureModeStorage?.load() ?? captureMode
         self.repository = repository
         self.microphoneRecorder = microphoneRecorder
         self.playbackController = playbackController
@@ -251,7 +245,6 @@ final class WiretapStore {
         self.permissionManager = permissionManager
         self.fileActions = fileActions
         self.microphoneRouteInspector = microphoneRouteInspector
-        self.captureModeStorage = captureModeStorage
         self.minimumFreeDiskSpaceBytes = minimumFreeDiskSpaceBytes
         self.captureStallThreshold = captureStallThreshold
     }
@@ -302,75 +295,50 @@ final class WiretapStore {
             return "\(Recording.sourceSummary(for: Array(activeCaptureSources))) capture active"
         }
 
-        if captureMode.requiresMicrophone, permissionState != .ready {
+        if permissionState != .ready {
             return "Permissions pending review"
         }
 
-        if captureMode.requiresSystemAudio, systemAudioState == .unavailable {
+        if systemAudioState == .unavailable {
             return "System audio needs review"
         }
 
-        return "\(captureMode.detailTitle) selected"
+        return "System audio + default microphone"
     }
 
     var capturePermissionTitle: String {
-        if captureMode.requiresSystemAudio, systemAudioState == .unavailable {
+        if systemAudioState == .unavailable {
             return "System Audio Needs Review"
         }
 
-        if captureMode.requiresMicrophone, permissionState == .denied {
+        if permissionState == .denied {
             return "Microphone Access Needed"
         }
 
-        switch captureMode {
-        case .systemAndMicrophone:
-            return permissionState == .ready ? "Microphone Ready" : permissionState.title
-        case .systemOnly:
-            return "System Audio Selected"
-        case .microphoneOnly:
-            return permissionState == .ready ? "Microphone Ready" : permissionState.title
-        }
+        return permissionState == .ready ? "Microphone Ready" : permissionState.title
     }
 
     var capturePermissionSummary: String {
-        switch captureMode {
-        case .systemOnly:
-            if systemAudioState == .unavailable {
-                return "Open Privacy & Security to allow Audio Capture, then retry recording."
-            }
+        if systemAudioState == .unavailable, permissionState == .ready {
+            return "Microphone access is ready. System audio capture needs Settings review."
+        }
 
-            return "Microphone access is not required. macOS checks Audio Capture permission when recording starts."
-        case .microphoneOnly:
-            switch permissionState {
-            case .notReviewed:
-                return "Wiretap uses the current macOS default input device."
-            case .ready:
-                return "Microphone access is ready for the current default input device."
-            case .denied:
-                return "Open System Settings to allow microphone access before recording."
-            }
-        case .systemAndMicrophone:
-            if systemAudioState == .unavailable, permissionState == .ready {
-                return "Microphone access is ready. System audio capture needs Settings review."
-            }
-
-            switch permissionState {
-            case .notReviewed:
-                return "Wiretap records system output audio and the current default microphone."
-            case .ready:
-                return "Microphone access is ready. macOS checks Audio Capture permission when recording starts."
-            case .denied:
-                return "Open System Settings to allow microphone access. Audio Capture may also require approval."
-            }
+        switch permissionState {
+        case .notReviewed:
+            return "Wiretap records system output audio and the current default microphone."
+        case .ready:
+            return "Microphone access is ready. macOS checks Screen & System Audio Recording permission when recording starts."
+        case .denied:
+            return "Open System Settings to allow microphone access. Screen & System Audio Recording may also require approval."
         }
     }
 
     var onboardingRecovery: WiretapNoticeRecovery? {
-        if captureMode.requiresSystemAudio, systemAudioState == .unavailable {
+        if systemAudioState == .unavailable {
             return .systemAudioSettings
         }
 
-        if captureMode.requiresMicrophone, permissionState == .denied {
+        if permissionState == .denied {
             return .microphoneSettings
         }
 
@@ -378,7 +346,7 @@ final class WiretapStore {
     }
 
     var canRecord: Bool {
-        !captureMode.requiresMicrophone || permissionState != .denied
+        permissionState != .denied
     }
 
     var isTimelineActive: Bool {
@@ -389,6 +357,14 @@ final class WiretapStore {
         permissionState = permissionManager.currentState()
         microphoneState = microphoneCaptureState(for: permissionState)
         isOnboardingPresented = permissionState == .notReviewed
+
+        // Resolve shareable content early so recording can start without
+        // waiting on ScreenCaptureKit. Skipped on first run so the
+        // Screen & System Audio Recording prompt appears during onboarding
+        // rather than at launch.
+        if permissionState != .notReviewed {
+            systemAudioTap.prewarm()
+        }
 
         do {
             let loadedRecordings = try repository.loadRecordings()
@@ -412,19 +388,11 @@ final class WiretapStore {
         isRecording ? stopRecording() : startRecording()
     }
 
-    func retryCaptureMode(for recording: Recording) -> RecordingCaptureMode {
-        retainedCaptureMode(for: recording)
-            ?? RecordingCaptureMode(sourceSummary: recording.sourceSummary)
-            ?? captureMode
-    }
-
     func canRetryRecording(_ recording: Recording) -> Bool {
-        let mode = retryCaptureMode(for: recording)
-        return !mode.requiresMicrophone || permissionState != .denied
+        canRecord
     }
 
     func recordAgain(_ recording: Recording) {
-        captureMode = retryCaptureMode(for: recording)
         startRecording()
     }
 
@@ -446,7 +414,7 @@ final class WiretapStore {
         do {
             try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
 
-            let requestedCaptureSources = captureMode.sources
+            let requestedCaptureSources: Set<RecordingSource> = [.systemAudio, .microphone]
             try validateMicrophoneRoute(for: requestedCaptureSources)
 
             let id = UUID()
@@ -454,12 +422,11 @@ final class WiretapStore {
             let finalURL = try repository.recordingURL(for: id)
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
-            let requestedCaptureMode = captureMode.rawValue
             var captureSources = Set<RecordingSource>()
             cleanupURLs = [microphoneURL, systemAudioURL]
             pendingRecordingID = id
             logger.info(
-                "Starting recording id=\(id.uuidString, privacy: .public) requestedSources=\(WiretapLog.sourceSummary(requestedCaptureSources), privacy: .public) mode=\(requestedCaptureMode, privacy: .public)"
+                "Starting recording id=\(id.uuidString, privacy: .public) requestedSources=\(WiretapLog.sourceSummary(requestedCaptureSources), privacy: .public)"
             )
             upsertRecording(
                 Recording(
@@ -547,11 +514,7 @@ final class WiretapStore {
             } else if case RecordingLibraryError.insufficientDiskSpace = error {
                 notice = WiretapNotice(title: "Not Enough Disk Space", message: error.localizedDescription)
             } else {
-                if captureMode.requiresMicrophone {
-                    microphoneState = .unavailable
-                } else {
-                    systemAudioState = .unavailable
-                }
+                microphoneState = .unavailable
                 notice = WiretapNotice(title: "Recording Error", message: error.localizedDescription)
             }
         }
@@ -722,19 +685,19 @@ final class WiretapStore {
     func markPermissionsReviewed() {
         permissionState = .ready
         isOnboardingPresented = false
+        systemAudioTap.prewarm()
     }
 
     @discardableResult
     func requestPermissions() async -> Bool {
-        if captureMode.requiresMicrophone {
-            permissionState = await permissionManager.requestMicrophoneAccess()
-            microphoneState = microphoneCaptureState(for: permissionState)
-        } else {
-            permissionState = permissionManager.currentState()
-            microphoneState = microphoneCaptureState(for: permissionState)
+        permissionState = await permissionManager.requestMicrophoneAccess()
+        microphoneState = microphoneCaptureState(for: permissionState)
+
+        if permissionState != .notReviewed {
+            systemAudioTap.prewarm()
         }
 
-        if captureMode.requiresMicrophone, permissionState == .denied {
+        if permissionState == .denied {
             notice = WiretapNotice(
                 title: "Microphone Access Denied",
                 message: "Open System Settings to allow microphone access before recording.",
@@ -833,36 +796,9 @@ final class WiretapStore {
         activeCaptureStalledSources = []
 
         for source in sources {
-            let frameCount = captureFrameCount(for: source)
-            activeCaptureFrameCounts[source] = frameCount
-            if frameCount > 0 {
-                activeCaptureProgressDates[source] = startedAt
-            }
+            activeCaptureFrameCounts[source] = captureFrameCount(for: source)
+            activeCaptureProgressDates[source] = startedAt
         }
-    }
-
-    private func retainedCaptureMode(for recording: Recording) -> RecordingCaptureMode? {
-        guard let recoveryFolderURL = recording.recoveryFolderURL,
-              let contents = try? FileManager.default.contentsOfDirectory(
-                at: recoveryFolderURL,
-                includingPropertiesForKeys: nil
-              )
-        else {
-            return nil
-        }
-
-        var sources = Set<RecordingSource>()
-        for url in contents {
-            let fileName = url.lastPathComponent.lowercased()
-            if fileName.contains("-system.") {
-                sources.insert(.systemAudio)
-            }
-            if fileName.contains("-microphone.") {
-                sources.insert(.microphone)
-            }
-        }
-
-        return RecordingCaptureMode(sources: sources)
     }
 
     private func updateCaptureHealth(now: Date) {
@@ -880,20 +816,29 @@ final class WiretapStore {
                 continue
             }
 
-            guard previousFrameCount > 0,
-                  !activeCaptureStalledSources.contains(source),
+            guard !activeCaptureStalledSources.contains(source),
                   let lastProgressDate = activeCaptureProgressDates[source],
                   now.timeIntervalSince(lastProgressDate) >= captureStallThreshold
             else { continue }
 
-            let failure = CaptureSourceFailure.stalled(source: source)
             activeCaptureStalledSources.insert(source)
             setCaptureState(.unavailable, for: source)
 
-            notice = WiretapNotice(
-                title: "Capture Source Stalled",
-                message: failure.localizedDescription
-            )
+            if source == .systemAudio, currentFrameCount == 0 {
+                // A capture stream that never delivers a single buffer is
+                // almost always a missing Screen & System Audio Recording
+                // permission.
+                notice = WiretapNotice(
+                    title: "System Audio Not Captured",
+                    message: "Wiretap is not receiving any system audio. Allow Wiretap under Privacy & Security > Screen & System Audio Recording, then relaunch Wiretap and record again.",
+                    recovery: .systemAudioSettings
+                )
+            } else {
+                notice = WiretapNotice(
+                    title: "Capture Source Stalled",
+                    message: CaptureSourceFailure.stalled(source: source).localizedDescription
+                )
+            }
         }
     }
 
@@ -1103,7 +1048,7 @@ final class WiretapStore {
         case .systemAudio:
             return WiretapNotice(
                 title: "System Audio Not Captured",
-                message: "Wiretap saved the microphone recording, but no system-audio buffers were captured. Make sure audio is playing and Audio Capture permission is allowed before trying again.",
+                message: "Wiretap saved the microphone recording, but no system-audio buffers were captured. Make sure audio is playing and Wiretap is allowed under Screen & System Audio Recording before trying again.",
                 recovery: .systemAudioSettings
             )
         case .microphone:
@@ -1356,7 +1301,7 @@ private extension WiretapStore {
         if SystemAudioTapError.isPermissionDenied(error) {
             return WiretapNotice(
                 title: "System Audio Permission Needed",
-                message: "Recording was not started because Wiretap needs Audio Capture permission to include system audio. Open Privacy & Security settings, allow Wiretap under Audio Capture if macOS lists it, then retry recording.",
+                message: "Recording was not started because Wiretap needs permission to record system audio. Open Privacy & Security settings, allow Wiretap under Screen & System Audio Recording, then relaunch Wiretap and retry recording.",
                 recovery: .systemAudioSettings
             )
         }
@@ -1371,8 +1316,7 @@ private extension WiretapStore {
 extension WiretapStore {
     static func live() -> WiretapStore {
         let store = WiretapStore(
-            microphoneRouteInspector: .live,
-            captureModeStorage: CaptureModeStorage()
+            microphoneRouteInspector: .live
         )
         store.loadLibrary()
         return store

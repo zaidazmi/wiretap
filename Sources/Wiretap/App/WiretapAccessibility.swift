@@ -14,14 +14,11 @@ enum WiretapAccessibility {
         static let noticeBanner = "wiretap.menu.noticeBanner"
         static let noticeDismissButton = "wiretap.menu.notice.dismiss"
         static let noticeRecoveryButton = "wiretap.menu.notice.recovery"
-        static let captureModePicker = "wiretap.menu.captureMode"
         static let recordButton = "wiretap.menu.record"
         static let stopButton = "wiretap.menu.stop"
         static let permissionsButton = "wiretap.menu.permissions"
         static let openLibraryButton = "wiretap.menu.openLibrary"
         static let quitButton = "wiretap.menu.quit"
-        static let systemAudioSource = "wiretap.menu.capture.systemAudio"
-        static let microphoneSource = "wiretap.menu.capture.microphone"
     }
 
     enum Library {
@@ -33,7 +30,6 @@ enum WiretapAccessibility {
         static let emptyRecordButton = "wiretap.library.empty.record"
         static let emptyPermissionsButton = "wiretap.library.empty.permissions"
         static let emptyClearSearchButton = "wiretap.library.empty.clearSearch"
-        static let captureModePicker = "wiretap.library.captureMode"
         static let statusStopButton = "wiretap.library.status.stop"
         static let toolbarPermissionsButton = "wiretap.library.toolbar.permissions"
         static let toolbarRecordButton = "wiretap.library.toolbar.record"
@@ -66,7 +62,6 @@ enum WiretapAccessibility {
 
     enum Onboarding {
         static let root = "wiretap.onboarding.root"
-        static let captureModePicker = "wiretap.onboarding.captureMode"
         static let systemAudioRow = "wiretap.onboarding.systemAudio"
         static let microphoneRow = "wiretap.onboarding.microphone"
         static let localFilesRow = "wiretap.onboarding.localFiles"

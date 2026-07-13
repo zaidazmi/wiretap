@@ -1,148 +1,129 @@
 import AVFoundation
-import CoreAudio
+import CoreGraphics
+import CoreMedia
 import Foundation
+@preconcurrency import ScreenCaptureKit
 
 protocol SystemAudioTapping: AnyObject {
     var isRunning: Bool { get }
     var capturedFrameCount: Int64 { get }
 
+    func prewarm()
     func start(writingTo outputURL: URL) throws
     @discardableResult func stop() -> CaptureStopResult
 }
 
-final class SystemAudioTap: SystemAudioTapping {
-    private let system = AudioHardwareSystem.shared
-    private let ioQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.system-audio-tap", qos: .userInitiated)
-    private var tap: AudioHardwareTap?
-    private var aggregateDevice: AudioHardwareAggregateDevice?
-    private var ioProcID: AudioDeviceIOProcID?
+/// Records the system-audio mix through ScreenCaptureKit.
+///
+/// ScreenCaptureKit captures the composited system mix at a fixed sample rate:
+/// it picks up apps that were already playing before capture started, keeps
+/// delivering buffers through silence, and does not follow output-device
+/// sample-rate renegotiation (Bluetooth A2DP/HFP switches). Core Audio process
+/// taps were tried first and failed on all three counts on real hardware; this
+/// mirrors how QuickRecorder, Azayaka, and OBS capture system audio.
+final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
+    private static let sampleRate = 48_000.0
+    private static let channelCount: AVAudioChannelCount = 2
+    private static let shareableContentTimeout: TimeInterval = 1.5
+
+    private let outputQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.system-audio-capture", qos: .userInitiated)
+    private let stateLock = NSLock()
+    private var stream: SCStream?
     private var writer: AudioBufferListFileWriter?
+    private var cachedDisplay: SCDisplay?
+    private var lastContentError: Error?
+    private var contentRefreshInProgress = false
+    private var permissionRequestState = ScreenCapturePermissionRequestState()
     private let logger = WiretapLog.capture
 
     var isRunning: Bool {
-        ioProcID != nil
+        writer != nil
     }
 
     var capturedFrameCount: Int64 {
         writer?.capturedFrameCount ?? 0
     }
 
+    /// Resolves shareable content ahead of time so recording can start
+    /// synchronously. The first call also surfaces the macOS
+    /// Screen & System Audio Recording consent prompt.
+    func prewarm() {
+        let shouldRequest = stateLock.withLock {
+            permissionRequestState.beginPrewarm()
+        }
+        guard shouldRequest else { return }
+
+        scheduleShareableDisplayRefresh()
+    }
+
     func start(writingTo outputURL: URL) throws {
-        guard !isRunning else { return }
+        guard writer == nil else { return }
 
         do {
-            let excludedProcesses = try currentProcessExclusionList()
-            let outputDeviceUID = try defaultOutputDeviceUID()
-            logger.info(
-                "Preparing system audio tap output=\(outputURL.lastPathComponent, privacy: .public) excludedProcesses=\(excludedProcesses.count, privacy: .public)"
+            let display = try resolveDisplay()
+
+            let configuration = SCStreamConfiguration()
+            configuration.width = 2
+            configuration.height = 2
+            configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale.max)
+            configuration.showsCursor = false
+            configuration.capturesAudio = true
+            configuration.excludesCurrentProcessAudio = true
+            configuration.sampleRate = Int(Self.sampleRate)
+            configuration.channelCount = Int(Self.channelCount)
+            configuration.queueDepth = 5
+
+            let filter = SCContentFilter(
+                display: display,
+                excludingApplications: [],
+                exceptingWindows: []
             )
-            let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: excludedProcesses)
-            tapDescription.uuid = UUID()
-            tapDescription.name = "Wiretap System Audio"
-            tapDescription.isPrivate = true
-            tapDescription.muteBehavior = .unmuted
 
-            guard let tap = try system.makeProcessTap(description: tapDescription) else {
-                throw SystemAudioTapError.tapCreationFailed
-            }
-            let tapUID: String
-            do {
-                tapUID = try tap.uid
-            } catch {
-                try? system.destroyProcessTap(tap)
-                throw error
-            }
-
-            var streamDescription = try tap.format
-            guard let tapInputFormat = AVAudioFormat(streamDescription: &streamDescription) else {
-                try system.destroyProcessTap(tap)
+            guard let inputFormat = AVAudioFormat(
+                standardFormatWithSampleRate: Self.sampleRate,
+                channels: Self.channelCount
+            ) else {
                 throw SystemAudioTapError.unsupportedFormat
             }
+
+            let writer = try AudioBufferListFileWriter(outputURL: outputURL, inputFormat: inputFormat)
+            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+            // ScreenCaptureKit errors without a screen output even for
+            // audio-only capture; its frames are dropped in the handler.
+            try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
+            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
+
+            outputQueue.sync {
+                self.writer = writer
+            }
+            self.stream = stream
+
+            stream.startCapture { [weak self] error in
+                guard let error else { return }
+                self?.recordPermissionFailureIfNeeded(error)
+                self?.logger.error(
+                    "System audio capture failed to start: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+
             logger.info(
-                "System audio tap format=\(WiretapLog.audioFormatSummary(tapInputFormat), privacy: .public) outputDevice=\(outputDeviceUID, privacy: .private(mask: .hash)) tap=\(tapUID, privacy: .private(mask: .hash))"
+                "System audio capture started format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) output=\(outputURL.lastPathComponent, privacy: .public)"
             )
-
-            let aggregateDescription: [String: Any] = [
-                kAudioAggregateDeviceNameKey: "Wiretap System Audio Device",
-                kAudioAggregateDeviceUIDKey: "dev.zaidazmi.Wiretap.Aggregate.\(UUID().uuidString)",
-                kAudioAggregateDeviceMainSubDeviceKey: outputDeviceUID,
-                kAudioAggregateDeviceIsPrivateKey: true,
-                kAudioAggregateDeviceIsStackedKey: false,
-                kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputDeviceUID]],
-                kAudioAggregateDeviceTapListKey: [[
-                    kAudioSubTapUIDKey: tapUID,
-                    kAudioSubTapDriftCompensationKey: true
-                ]],
-                kAudioAggregateDeviceTapAutoStartKey: true
-            ]
-
-            guard let aggregateDevice = try system.makeAggregateDevice(description: aggregateDescription) else {
-                try system.destroyProcessTap(tap)
-                throw SystemAudioTapError.aggregateCreationFailed
-            }
-
-            let inputFormat = captureFormat(for: aggregateDevice, fallback: tapInputFormat)
-            logger.info(
-                "System audio aggregate capture format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) aggregateDevice=\(aggregateDevice.id, privacy: .public)"
-            )
-
-            let writer: AudioBufferListFileWriter
-            do {
-                writer = try AudioBufferListFileWriter(outputURL: outputURL, inputFormat: inputFormat)
-            } catch {
-                try? system.destroyAggregateDevice(aggregateDevice)
-                try? system.destroyProcessTap(tap)
-                throw error
-            }
-
-            self.tap = tap
-            self.aggregateDevice = aggregateDevice
-            self.writer = writer
-
-            var ioProcID: AudioDeviceIOProcID?
-            let createStatus = AudioDeviceCreateIOProcIDWithBlock(
-                &ioProcID,
-                aggregateDevice.id,
-                ioQueue
-            ) { [weak self] _, inputData, _, _, _ in
-                self?.writer?.write(inputData: inputData)
-            }
-
-            guard createStatus == noErr, let ioProcID else {
-                throw CoreAudioStatusError(status: createStatus, operation: "create tap IOProc")
-            }
-
-            let startStatus = AudioDeviceStart(aggregateDevice.id, ioProcID)
-            guard startStatus == noErr else {
-                AudioDeviceDestroyIOProcID(aggregateDevice.id, ioProcID)
-                throw CoreAudioStatusError(status: startStatus, operation: "start tap IOProc")
-            }
-
-            self.ioProcID = ioProcID
-            logger.info("System audio tap started aggregateDevice=\(aggregateDevice.id, privacy: .public)")
         } catch {
             let mappedError = SystemAudioTapError.map(error)
-            logger.error("System audio tap failed: \(mappedError.localizedDescription, privacy: .public)")
-            stop()
+            logger.error("System audio capture failed: \(mappedError.localizedDescription, privacy: .public)")
+            stopStream()
+            outputQueue.sync { self.writer = nil }
             throw mappedError
         }
     }
 
     @discardableResult
     func stop() -> CaptureStopResult {
-        let wasRunning = aggregateDevice != nil || tap != nil || writer != nil
-
-        if let aggregateDevice, let ioProcID {
-            AudioDeviceStop(aggregateDevice.id, ioProcID)
-            AudioDeviceDestroyIOProcID(aggregateDevice.id, ioProcID)
-        }
-
-        if let aggregateDevice {
-            try? system.destroyAggregateDevice(aggregateDevice)
-        }
-
-        if let tap {
-            try? system.destroyProcessTap(tap)
+        let writer = self.writer
+        stopStream()
+        outputQueue.sync {
+            self.writer = nil
         }
 
         let flushResult = writer?.flush()
@@ -151,103 +132,222 @@ final class SystemAudioTap: SystemAudioTapping {
             droppedFrameCount: flushResult?.droppedFrameCount ?? 0,
             writeError: flushResult?.writeError
         )
-        ioProcID = nil
-        aggregateDevice = nil
-        tap = nil
-        writer = nil
 
-        if wasRunning {
+        if writer != nil {
             logger.info(
-                "System audio tap stopped capturedFrames=\(result.capturedFrameCount, privacy: .public) droppedFrames=\(result.droppedFrameCount, privacy: .public) writeError=\(result.writeError?.localizedDescription ?? "none", privacy: .public)"
+                "System audio capture stopped capturedFrames=\(result.capturedFrameCount, privacy: .public) droppedFrames=\(result.droppedFrameCount, privacy: .public) writeError=\(result.writeError?.localizedDescription ?? "none", privacy: .public)"
             )
         }
 
         return result
     }
 
-    private func currentProcessExclusionList() throws -> [AudioObjectID] {
-        if let process = try system.process(for: getpid()) {
-            return [process.id]
-        }
-
-        return []
-    }
-
-    private func defaultOutputDeviceUID() throws -> String {
-        var outputDeviceID = AudioDeviceID(kAudioObjectUnknown)
-        var outputDeviceAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var outputDeviceSize = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let outputDeviceStatus = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &outputDeviceAddress,
-            0,
-            nil,
-            &outputDeviceSize,
-            &outputDeviceID
-        )
-
-        guard outputDeviceStatus == noErr, outputDeviceID != kAudioObjectUnknown else {
-            throw SystemAudioTapError.outputDeviceUnavailable
-        }
-
-        return try AudioHardwareDevice(id: outputDeviceID).uid
-    }
-
-    private func captureFormat(
-        for aggregateDevice: AudioHardwareAggregateDevice,
-        fallback tapFormat: AVAudioFormat
-    ) -> AVAudioFormat {
-        do {
-            let streams = try AudioHardwareDevice(id: aggregateDevice.id).streams
-
-            for stream in streams where (try? stream.direction) == .input {
-                var streamDescription = try stream.virtualFormat
-                if let format = AVAudioFormat(streamDescription: &streamDescription),
-                   format.channelCount > 0 {
-                    return format
-                }
-            }
-
-            for stream in streams {
-                var streamDescription = try stream.virtualFormat
-                if let format = AVAudioFormat(streamDescription: &streamDescription),
-                   format.channelCount > 0 {
-                    return format
-                }
-            }
-        } catch {
-            logger.warning(
-                "Could not resolve aggregate capture format; falling back to tap format error=\(error.localizedDescription, privacy: .public)"
+    private func stopStream() {
+        guard let stream else { return }
+        self.stream = nil
+        stream.stopCapture { [weak self] error in
+            guard let error else { return }
+            self?.logger.info(
+                "System audio stream stop reported: \(error.localizedDescription, privacy: .public)"
             )
         }
+    }
 
-        return tapFormat
+    /// Returns the cached display, or waits briefly for a fresh shareable
+    /// content fetch. A fetch blocked on the consent prompt times out and
+    /// surfaces as a permission error so the user is pointed at Settings.
+    private func resolveDisplay() throws -> SCDisplay {
+        let initialState = stateLock.withLock {
+            (
+                display: cachedDisplay,
+                permissionFailureLatched: permissionRequestState.permissionFailureLatched
+            )
+        }
+        guard !initialState.permissionFailureLatched else {
+            throw SystemAudioTapError.permissionDenied
+        }
+        if let display = initialState.display {
+            return display
+        }
+
+        let canAttemptCapture = stateLock.withLock {
+            permissionRequestState.canAttemptCapture(
+                hasCachedDisplay: cachedDisplay != nil,
+                preflightGranted: CGPreflightScreenCaptureAccess()
+            )
+        }
+        guard canAttemptCapture else {
+            throw SystemAudioTapError.permissionDenied
+        }
+
+        scheduleShareableDisplayRefresh()
+
+        let deadline = Date().addingTimeInterval(Self.shareableContentTimeout)
+        while Date() < deadline {
+            let snapshot = stateLock.withLock {
+                (
+                    display: cachedDisplay,
+                    error: lastContentError,
+                    isRefreshing: contentRefreshInProgress
+                )
+            }
+
+            if let display = snapshot.display {
+                return display
+            }
+            if let error = snapshot.error {
+                if SystemAudioTapError.isPermissionDenied(error) {
+                    throw SystemAudioTapError.permissionDenied
+                }
+                throw error
+            }
+            if !snapshot.isRefreshing {
+                break
+            }
+
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+
+        if let display = stateLock.withLock({ cachedDisplay }) {
+            return display
+        }
+
+        if let lastContentError = stateLock.withLock({ lastContentError }),
+           !SystemAudioTapError.isPermissionDenied(lastContentError) {
+            throw lastContentError
+        }
+
+        throw SystemAudioTapError.permissionDenied
+    }
+
+    private func scheduleShareableDisplayRefresh() {
+        let shouldRefresh = stateLock.withLock {
+            guard !contentRefreshInProgress,
+                  !permissionRequestState.permissionFailureLatched
+            else { return false }
+
+            contentRefreshInProgress = true
+            lastContentError = nil
+            return true
+        }
+        guard shouldRefresh else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(
+                    false,
+                    onScreenWindowsOnly: false
+                )
+                stateLock.withLock {
+                    cachedDisplay = content.displays.first
+                    lastContentError = content.displays.isEmpty
+                        ? SystemAudioTapError.displayUnavailable
+                        : nil
+                    contentRefreshInProgress = false
+                }
+            } catch {
+                stateLock.withLock {
+                    cachedDisplay = nil
+                    lastContentError = error
+                    contentRefreshInProgress = false
+                    if SystemAudioTapError.isPermissionDenied(error) {
+                        permissionRequestState.recordPermissionFailure()
+                    }
+                }
+                logger.info(
+                    "Shareable content unavailable: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    private func recordPermissionFailureIfNeeded(_ error: Error) {
+        guard SystemAudioTapError.isPermissionDenied(error) else { return }
+
+        stateLock.withLock {
+            cachedDisplay = nil
+            lastContentError = error
+            permissionRequestState.recordPermissionFailure()
+        }
+    }
+}
+
+struct ScreenCapturePermissionRequestState: Equatable {
+    private(set) var prewarmAttempted = false
+    private(set) var permissionFailureLatched = false
+
+    mutating func beginPrewarm() -> Bool {
+        guard !prewarmAttempted, !permissionFailureLatched else { return false }
+        prewarmAttempted = true
+        return true
+    }
+
+    func canAttemptCapture(hasCachedDisplay: Bool, preflightGranted: Bool) -> Bool {
+        !permissionFailureLatched && (hasCachedDisplay || preflightGranted)
+    }
+
+    mutating func recordPermissionFailure() {
+        permissionFailureLatched = true
+    }
+}
+
+extension SystemAudioTap: SCStreamDelegate, SCStreamOutput {
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        recordPermissionFailureIfNeeded(error)
+        logger.error(
+            "System audio stream stopped unexpectedly: \(error.localizedDescription, privacy: .public)"
+        )
+    }
+
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
+        guard type == .audio,
+              sampleBuffer.isValid,
+              let writer
+        else { return }
+
+        let presentationTime = sampleBuffer.presentationTimeStamp
+        let sampleTime: Float64? = presentationTime.isValid
+            ? presentationTime.seconds * Self.sampleRate
+            : nil
+
+        // The buffer-list pointers are only valid inside this scope; the
+        // writer copies synchronously before queueing the file write.
+        try? sampleBuffer.withAudioBufferList { audioBufferList, _ in
+            guard let streamDescription = sampleBuffer.formatDescription?.audioStreamBasicDescription,
+                  let format = AVAudioFormat(
+                    standardFormatWithSampleRate: streamDescription.mSampleRate,
+                    channels: max(1, streamDescription.mChannelsPerFrame)
+                  ),
+                  let buffer = AVAudioPCMBuffer(
+                    pcmFormat: format,
+                    bufferListNoCopy: audioBufferList.unsafePointer
+                  )
+            else { return }
+
+            writer.write(buffer: buffer, sampleTime: sampleTime)
+        }
     }
 }
 
 enum SystemAudioTapError: LocalizedError {
     case permissionDenied
-    case tapCreationFailed
-    case aggregateCreationFailed
+    case displayUnavailable
     case unsupportedFormat
-    case outputDeviceUnavailable
 
     var errorDescription: String? {
         switch self {
         case .permissionDenied:
-            "Wiretap does not have permission to capture system audio."
-        case .tapCreationFailed:
-            "Wiretap could not create the private system-audio process tap."
-        case .aggregateCreationFailed:
-            "Wiretap could not create the private aggregate device for the system-audio tap."
+            "Wiretap does not have permission to record system audio. Allow Wiretap under Privacy & Security > Screen & System Audio Recording, then relaunch Wiretap."
+        case .displayUnavailable:
+            "Wiretap could not find a display to capture system audio from."
         case .unsupportedFormat:
-            "Wiretap could not read the system-audio tap format."
-        case .outputDeviceUnavailable:
-            "Wiretap could not find the default audio output device."
+            "Wiretap could not create the system-audio capture format."
         }
     }
 
@@ -261,6 +361,12 @@ enum SystemAudioTapError: LocalizedError {
 
     static func isPermissionDenied(_ error: Error) -> Bool {
         if case SystemAudioTapError.permissionDenied = error {
+            return true
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == SCStreamErrorDomain,
+           nsError.code == SCStreamError.Code.userDeclined.rawValue {
             return true
         }
 

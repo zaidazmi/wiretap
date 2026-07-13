@@ -133,7 +133,6 @@ struct RecordingDetailView: View {
                     InterruptedRecordingPanel(
                         sourceSummary: recording.sourceSummary,
                         recoveryFolderURL: recoveryFolderURL,
-                        retryCaptureMode: store.retryCaptureMode(for: recording),
                         canRecord: store.canRetryRecording(recording),
                         onRecord: { store.recordAgain(recording) },
                         onReveal: { store.reveal(recording) }
@@ -258,7 +257,6 @@ private struct PlaybackProgressTrack: View {
 private struct InterruptedRecordingPanel: View {
     let sourceSummary: String
     let recoveryFolderURL: URL
-    let retryCaptureMode: RecordingCaptureMode
     let canRecord: Bool
     let onRecord: () -> Void
     let onReveal: () -> Void
@@ -278,7 +276,6 @@ private struct InterruptedRecordingPanel: View {
 
                     MetadataRow(title: "Status", value: sourceSummary)
                     MetadataRow(title: "Retained sources", value: recoveryFolderURL.path)
-                    MetadataRow(title: "Retry mode", value: retryCaptureMode.detailTitle)
 
                     HStack(spacing: 10) {
                         Button(action: onReveal) {

@@ -11,6 +11,8 @@
     <key>CFBundleIdentifier</key>
     <string>dev.zaidazmi.Wiretap</string>
     <key>CFBundleIconFile</key>
+    <string>Wiretap.icns</string>
+    <key>CFBundleIconName</key>
     <string>Wiretap</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>

@@ -10,3 +10,33 @@ struct CaptureStopResult {
         capturedFrameCount > 0
     }
 }
+
+enum CaptureDropRecoveryPolicy {
+    private static let alwaysRecoverableFrameCount: Int64 = 2_048
+    private static let maximumRecoverableFrameCount: Int64 = 12_000
+    private static let maximumRecoverableFraction = 0.005
+
+    static func canRecover(_ result: CaptureStopResult) -> Bool {
+        let droppedFrames = result.droppedFrameCount
+        guard droppedFrames > 0 else { return true }
+
+        if droppedFrames <= alwaysRecoverableFrameCount {
+            return true
+        }
+
+        guard droppedFrames <= maximumRecoverableFrameCount,
+              result.capturedFrameCount > 0
+        else { return false }
+
+        return Double(droppedFrames) / Double(result.capturedFrameCount)
+            <= maximumRecoverableFraction
+    }
+
+    static func canRecover(_ error: Error, result: CaptureStopResult) -> Bool {
+        guard let writerError = error as? AudioBufferListFileWriterError,
+              case .bufferPoolExhausted = writerError
+        else { return false }
+
+        return canRecover(result)
+    }
+}

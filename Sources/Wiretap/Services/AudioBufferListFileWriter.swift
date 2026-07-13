@@ -25,7 +25,10 @@ final class AudioBufferListFileWriter {
     init(
         outputURL: URL,
         inputFormat: AVAudioFormat,
-        bufferPoolSize: Int = 12,
+        // VoiceProcessingIO normally delivers 512-frame buffers. Keep more than
+        // one second of reusable headroom so a short disk or scheduler stall
+        // cannot force the real-time callback to drop microphone audio.
+        bufferPoolSize: Int = 64,
         pooledFrameCapacity: AVAudioFrameCount = 16_384,
         writeBuffer: @escaping (AVAudioFile, AVAudioPCMBuffer) throws -> Void = { audioFile, buffer in
             try audioFile.write(from: buffer)
@@ -49,7 +52,7 @@ final class AudioBufferListFileWriter {
         )
         self.writeQueue = DispatchQueue(
             label: "dev.zaidazmi.Wiretap.audio-file-writer.\(UUID().uuidString)",
-            qos: .utility
+            qos: .userInitiated
         )
         self.writeQueue.setSpecific(key: writeQueueKey, value: true)
     }

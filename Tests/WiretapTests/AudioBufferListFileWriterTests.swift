@@ -87,6 +87,43 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(result.droppedFrameCount, Int64(buffer.frameLength))
     }
 
+    func testDefaultBufferPoolAbsorbsShortWriterStallWithoutDroppingFrames() throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("default-pool-stall.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.01)
+        let writeStarted = DispatchSemaphore(value: 0)
+        let releaseFirstWrite = DispatchSemaphore(value: 0)
+        let writer = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format,
+            writeBuffer: { audioFile, buffer in
+                if audioFile.framePosition == 0 {
+                    writeStarted.signal()
+                    _ = releaseFirstWrite.wait(timeout: .now() + 2)
+                }
+                try audioFile.write(from: buffer)
+            }
+        )
+
+        writer.write(inputData: buffer.audioBufferList)
+        XCTAssertEqual(writeStarted.wait(timeout: .now() + 2), .success)
+        for _ in 0..<32 {
+            writer.write(inputData: buffer.audioBufferList)
+        }
+        releaseFirstWrite.signal()
+
+        let result = writer.flush()
+
+        XCTAssertNil(result.writeError)
+        XCTAssertEqual(result.capturedFrameCount, Int64(buffer.frameLength * 33))
+        XCTAssertEqual(result.droppedFrameCount, 0)
+    }
+
     func testInterleavedInputReportsExactCapturedFrameCount() async throws {
         let outputURL = temporaryDirectory.appendingPathComponent("interleaved-input.caf")
         let format = try XCTUnwrap(AVAudioFormat(

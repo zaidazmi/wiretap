@@ -873,7 +873,11 @@ final class WiretapStore {
         let title = reason.recordingTitle(createdAt: stoppedAt)
         let captureSources = activeCaptureSources
         let sourceStartDates = activeSourceStartDates
-        let captureWriteError = microphoneResult.writeError ?? systemAudioResult.writeError
+        let captureWriteError = captureWriteFailure(
+            captureSources: captureSources,
+            microphoneResult: microphoneResult,
+            systemAudioResult: systemAudioResult
+        )
         let capturedSources = capturedSources(
             captureSources: captureSources,
             microphoneResult: microphoneResult,
@@ -1065,16 +1069,41 @@ final class WiretapStore {
         microphoneResult: CaptureStopResult,
         systemAudioResult: CaptureStopResult
     ) -> CaptureSourceFailure? {
-        if captureSources.contains(.systemAudio), systemAudioResult.droppedFrameCount > 0 {
+        if captureSources.contains(.systemAudio),
+           systemAudioResult.droppedFrameCount > 0,
+           !CaptureDropRecoveryPolicy.canRecover(systemAudioResult) {
             return .droppedFrames(source: .systemAudio, count: systemAudioResult.droppedFrameCount)
         }
 
-        if captureSources.contains(.microphone), microphoneResult.droppedFrameCount > 0 {
+        if captureSources.contains(.microphone),
+           microphoneResult.droppedFrameCount > 0,
+           !CaptureDropRecoveryPolicy.canRecover(microphoneResult) {
             return .droppedFrames(source: .microphone, count: microphoneResult.droppedFrameCount)
         }
 
         return nil
     }
+
+    private func captureWriteFailure(
+        captureSources: Set<RecordingSource>,
+        microphoneResult: CaptureStopResult,
+        systemAudioResult: CaptureStopResult
+    ) -> Error? {
+        if captureSources.contains(.systemAudio),
+           let error = systemAudioResult.writeError,
+           !CaptureDropRecoveryPolicy.canRecover(error, result: systemAudioResult) {
+            return error
+        }
+
+        if captureSources.contains(.microphone),
+           let error = microphoneResult.writeError,
+           !CaptureDropRecoveryPolicy.canRecover(error, result: microphoneResult) {
+            return error
+        }
+
+        return nil
+    }
+
 
     private func finalizeRecording(
         id: Recording.ID,

@@ -413,13 +413,13 @@ final class WiretapStoreTests: XCTestCase {
     @MainActor
     func testStopRecordingSurfacesDroppedCaptureFramesAsFinalizationFailure() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
-        let droppedFrameError = AudioBufferListFileWriterError.bufferPoolExhausted(frameCount: 1_024)
+        let droppedFrameError = AudioBufferListFileWriterError.bufferPoolExhausted(frameCount: 12_000)
         let systemAudioTap = FakeSystemAudioTap()
         let microphoneRecorder = FakeMicrophoneRecorder(
             stopResult: CaptureStopResult(
                 duration: 12,
                 capturedFrameCount: 48_000,
-                droppedFrameCount: 1_024,
+                droppedFrameCount: 12_000,
                 writeError: droppedFrameError
             )
         )
@@ -442,7 +442,7 @@ final class WiretapStoreTests: XCTestCase {
         XCTAssertNil(recording.fileURL)
         XCTAssertEqual(retainedFileNames.count, 2)
         XCTAssertEqual(store.notice?.title, "Finalization Failed")
-        XCTAssertTrue(store.notice?.message.localizedStandardContains("dropped 1024 audio frames") == true)
+        XCTAssertTrue(store.notice?.message.localizedStandardContains("dropped 12000 audio frames") == true)
         XCTAssertTrue(store.notice?.message.localizedStandardContains("buffer pool was exhausted") == true)
     }
 
@@ -452,7 +452,7 @@ final class WiretapStoreTests: XCTestCase {
         let systemAudioTap = FakeSystemAudioTap(
             stopResult: CaptureStopResult(
                 capturedFrameCount: 48_000,
-                droppedFrameCount: 777
+                droppedFrameCount: 12_000
             )
         )
         let microphoneRecorder = FakeMicrophoneRecorder(
@@ -478,7 +478,7 @@ final class WiretapStoreTests: XCTestCase {
         XCTAssertNil(recording.fileURL)
         XCTAssertNotNil(recording.recoveryFolderURL)
         XCTAssertEqual(store.notice?.title, "Finalization Failed")
-        XCTAssertTrue(store.notice?.message.localizedStandardContains("dropped 777 audio frames") == true)
+        XCTAssertTrue(store.notice?.message.localizedStandardContains("dropped 12000 audio frames") == true)
         XCTAssertTrue(store.notice?.message.localizedStandardContains("System audio") == true)
     }
 

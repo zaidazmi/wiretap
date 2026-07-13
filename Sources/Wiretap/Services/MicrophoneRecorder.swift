@@ -8,7 +8,12 @@ protocol MicrophoneRecording: AnyObject {
     var capturedFrameCount: Int64 { get }
 
     func startRecording(to url: URL) throws
+    func handleDeviceChange(_ change: AudioDeviceChange) throws
     @discardableResult func stopRecording() -> CaptureStopResult
+}
+
+extension MicrophoneRecording {
+    func handleDeviceChange(_: AudioDeviceChange) throws {}
 }
 
 final class MicrophoneRecorder: MicrophoneRecording {
@@ -28,6 +33,18 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
     var capturedFrameCount: Int64 {
         writer?.capturedFrameCount ?? 0
+    }
+
+    func handleDeviceChange(_ change: AudioDeviceChange) throws {
+        guard writer != nil else { return }
+
+        switch change {
+        case .defaultOutput:
+            updatePostProcessingForCurrentOutput()
+        case .defaultInput:
+            try switchToDefaultInputDevice()
+            updatePostProcessingForCurrentOutput()
+        }
     }
 
     func startRecording(to url: URL) throws {
@@ -108,8 +125,86 @@ final class MicrophoneRecorder: MicrophoneRecording {
         self.writer = writer
         self.postProcessing = postProcessing
 
+        let ioProcID = try createIOProc(on: device, writer: writer)
+        try startIOProc(ioProcID, on: device)
+
+        self.ioProcID = ioProcID
+        startedAt = Date()
+        formatObserver.start(observing: device.id) { [weak self] in
+            self?.refreshCaptureFormat()
+        }
+        logger.info("Microphone capture started mode=physical-device device=\(device.id, privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public)")
+    }
+
+    private func switchToDefaultInputDevice() throws {
+        guard let writer,
+              let previousDevice = device,
+              let newDevice = try system.defaultInputDevice
+        else {
+            throw AudioRecordingError.noDefaultInputDevice
+        }
+
+        guard newDevice.id != previousDevice.id else {
+            refreshCaptureFormat()
+            return
+        }
+
+        let previousIOProcID = ioProcID
+        let handoffStartedAt = Date()
+        formatObserver.stop()
+        if let previousIOProcID {
+            AudioDeviceStop(previousDevice.id, previousIOProcID)
+            AudioDeviceDestroyIOProcID(previousDevice.id, previousIOProcID)
+        }
+        device = nil
+        ioProcID = nil
+
+        var silenceAccountedAt = handoffStartedAt
+        do {
+            let newFormat = try inputFormat(for: newDevice)
+            writer.updateInputFormat(newFormat)
+            let newIOProcID = try createIOProc(on: newDevice, writer: writer)
+            let now = Date()
+            writer.appendHandoffSilence(duration: now.timeIntervalSince(silenceAccountedAt))
+            silenceAccountedAt = now
+            try startIOProc(newIOProcID, on: newDevice)
+
+            device = newDevice
+            ioProcID = newIOProcID
+            observeFormatChanges(on: newDevice)
+            logger.info(
+                "Microphone device switched from=\(previousDevice.id, privacy: .public) to=\(newDevice.id, privacy: .public) format=\(WiretapLog.audioFormatSummary(newFormat), privacy: .public) handoffSeconds=\(Date().timeIntervalSince(handoffStartedAt), privacy: .public)"
+            )
+        } catch {
+            logger.error(
+                "Microphone switch to device=\(newDevice.id, privacy: .public) failed error=\(error.localizedDescription, privacy: .public); attempting previous device=\(previousDevice.id, privacy: .public)"
+            )
+            do {
+                let previousFormat = try inputFormat(for: previousDevice)
+                writer.updateInputFormat(previousFormat)
+                let restoredIOProcID = try createIOProc(on: previousDevice, writer: writer)
+                let now = Date()
+                writer.appendHandoffSilence(duration: now.timeIntervalSince(silenceAccountedAt))
+                try startIOProc(restoredIOProcID, on: previousDevice)
+
+                device = previousDevice
+                ioProcID = restoredIOProcID
+                observeFormatChanges(on: previousDevice)
+                logger.warning(
+                    "Microphone capture remained on previous device=\(previousDevice.id, privacy: .public) after default-device switch failed"
+                )
+            } catch {
+                throw AudioRecordingError.deviceHandoffFailed(underlying: error)
+            }
+        }
+    }
+
+    private func createIOProc(
+        on device: AudioHardwareDevice,
+        writer: AudioBufferListFileWriter
+    ) throws -> AudioDeviceIOProcID {
         var ioProcID: AudioDeviceIOProcID?
-        let createStatus = AudioDeviceCreateIOProcIDWithBlock(
+        let status = AudioDeviceCreateIOProcIDWithBlock(
             &ioProcID,
             device.id,
             ioQueue
@@ -119,23 +214,43 @@ final class MicrophoneRecorder: MicrophoneRecording {
                 : nil
             writer?.write(inputData: inputData, sampleTime: sampleTime)
         }
-
-        guard createStatus == noErr, let ioProcID else {
-            throw CoreAudioStatusError(status: createStatus, operation: "create microphone IOProc")
+        guard status == noErr, let ioProcID else {
+            throw CoreAudioStatusError(status: status, operation: "create microphone IOProc")
         }
+        return ioProcID
+    }
 
-        let startStatus = AudioDeviceStart(device.id, ioProcID)
-        guard startStatus == noErr else {
+    private func startIOProc(
+        _ ioProcID: AudioDeviceIOProcID,
+        on device: AudioHardwareDevice
+    ) throws {
+        let status = AudioDeviceStart(device.id, ioProcID)
+        guard status == noErr else {
             AudioDeviceDestroyIOProcID(device.id, ioProcID)
-            throw CoreAudioStatusError(status: startStatus, operation: "start microphone IOProc")
+            throw CoreAudioStatusError(status: status, operation: "start microphone IOProc")
         }
+    }
 
-        self.ioProcID = ioProcID
-        startedAt = Date()
+    private func observeFormatChanges(on device: AudioHardwareDevice) {
         formatObserver.start(observing: device.id) { [weak self] in
             self?.refreshCaptureFormat()
         }
-        logger.info("Microphone capture started mode=physical-device device=\(device.id, privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public)")
+    }
+
+    private func updatePostProcessingForCurrentOutput() {
+        let outputRoute: MicrophoneOutputRoute?
+        do {
+            outputRoute = try currentOutputRoute()
+        } catch {
+            outputRoute = nil
+        }
+        let requiredProcessing = MicrophoneCapturePolicy.postProcessing(for: outputRoute)
+        if requiredProcessing == .soundIsolation {
+            postProcessing = .soundIsolation
+        }
+        logger.info(
+            "Microphone output route changed outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) postProcessing=\(self.postProcessing.rawValue, privacy: .public)"
+        )
     }
 
     private func currentOutputRoute() throws -> MicrophoneOutputRoute? {
@@ -229,6 +344,7 @@ enum MicrophoneCapturePolicy {
 enum AudioRecordingError: LocalizedError {
     case noDefaultInputDevice
     case unsupportedFormat
+    case deviceHandoffFailed(underlying: Error)
 
     var errorDescription: String? {
         switch self {
@@ -236,6 +352,8 @@ enum AudioRecordingError: LocalizedError {
             "Wiretap could not find a default microphone input device."
         case .unsupportedFormat:
             "Wiretap could not start recording from the default microphone."
+        case .deviceHandoffFailed:
+            "Wiretap could not continue microphone capture after the default input device changed."
         }
     }
 }

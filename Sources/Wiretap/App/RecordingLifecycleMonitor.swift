@@ -37,8 +37,8 @@ final class RecordingLifecycleMonitor {
             store?.preserveInterruptedRecording(reason: .sessionInactive)
         }
 
-        audioDeviceChangeMonitor.start { [weak store] in
-            store?.preserveInterruptedRecording(reason: .audioDeviceChanged)
+        audioDeviceChangeMonitor.start { [weak store] change in
+            store?.handleAudioDeviceChange(change)
         }
     }
 

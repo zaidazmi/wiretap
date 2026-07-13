@@ -532,6 +532,41 @@ final class WiretapStore {
         finishActiveRecording(reason: .interrupted(reason), finalization: .retainSources)
     }
 
+    func handleAudioDeviceChange(_ change: AudioDeviceChange) {
+        guard isRecording, activeCaptureSources.contains(.microphone) else { return }
+
+        if change == .defaultInput,
+           activeCaptureSources.contains(.systemAudio),
+           let inspection = microphoneRouteInspector.inspectDefaultInput(),
+           inspection.isLikelySystemAudioLoopback {
+            logger.warning(
+                "Ignoring default input switch to likely loopback device=\(inspection.deviceName, privacy: .private(mask: .hash)); existing microphone capture remains active"
+            )
+            notice = WiretapNotice(
+                title: "Microphone Input Not Switched",
+                message: "\(inspection.deviceName) looks like a virtual or aggregate system-audio route. Wiretap kept recording with the previous microphone to avoid duplicated audio."
+            )
+            return
+        }
+
+        do {
+            try microphoneRecorder.handleDeviceChange(change)
+            let now = Date()
+            activeCaptureFrameCounts[.microphone] = microphoneRecorder.capturedFrameCount
+            activeCaptureProgressDates[.microphone] = now
+            activeCaptureStalledSources.remove(.microphone)
+            microphoneState = .ready
+            logger.info(
+                "Recording continued after audio device change type=\(String(describing: change), privacy: .public) micFrames=\(self.microphoneRecorder.capturedFrameCount, privacy: .public)"
+            )
+        } catch {
+            logger.error(
+                "Audio device handoff failed type=\(String(describing: change), privacy: .public) error=\(error.localizedDescription, privacy: .public); retaining active sources"
+            )
+            preserveInterruptedRecording(reason: .audioDeviceChanged)
+        }
+    }
+
     func tick(now: Date = Date()) {
         if isRecording, let recordingStartedAt {
             elapsedSeconds = now.timeIntervalSince(recordingStartedAt)

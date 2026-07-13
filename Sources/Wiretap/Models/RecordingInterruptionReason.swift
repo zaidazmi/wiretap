@@ -16,7 +16,7 @@ enum RecordingInterruptionReason: String, CaseIterable, Sendable {
         case .sessionInactive:
             "The active macOS session changed, so Wiretap stopped capture and saved the partial recording for review."
         case .audioDeviceChanged:
-            "The default audio device changed, so Wiretap stopped capture and saved the partial recording for review."
+            "Wiretap could not safely continue after the default audio device changed, so it saved the partial recording for review."
         case .unexpectedShutdown:
             "Wiretap found a recording that did not shut down cleanly. Source files were retained for recovery."
         }

@@ -369,6 +369,33 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(duration, 0.5, accuracy: 0.02)
     }
 
+    func testDeviceHandoffSilenceKeepsContinuousTimeline() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("device-handoff-gap.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.1)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format,
+            channelMapping: .primaryInput
+        )
+
+        writer?.write(inputData: buffer.audioBufferList)
+        writer?.appendHandoffSilence(duration: 0.2)
+        writer?.write(inputData: buffer.audioBufferList)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.4, accuracy: 0.02)
+    }
+
     func testEmptyCallbackAnchorsTimelineForLeadingSilence() async throws {
         let outputURL = temporaryDirectory.appendingPathComponent("leading-gap.caf")
         let format = try XCTUnwrap(AVAudioFormat(

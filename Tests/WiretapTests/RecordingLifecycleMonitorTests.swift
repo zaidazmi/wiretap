@@ -24,25 +24,64 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testAudioDeviceChangePreservesActiveRecording() throws {
+    func testAudioDeviceChangesContinueActiveRecording() throws {
         let audioDeviceMonitor = FakeAudioDeviceChangeMonitor()
         var context = makeLifecycleContext(audioDeviceMonitor: audioDeviceMonitor)
 
         context.store.startRecording()
-        audioDeviceMonitor.triggerChange()
+        audioDeviceMonitor.triggerChange(.defaultOutput)
+        audioDeviceMonitor.triggerChange(.defaultInput)
 
-        try assertInterruptedRecording(
-            in: context.store,
-            sourceSummary: "Interrupted - source files retained after audio device change",
-            noticeText: "default audio device changed"
-        )
+        XCTAssertTrue(context.store.isRecording)
+        XCTAssertEqual(context.store.recordings.first?.status, .recording)
         XCTAssertNotNil(context.lifecycleMonitor)
-        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 1)
-        XCTAssertEqual(context.systemAudioTap.stopCallCount, 1)
+        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 0)
+        XCTAssertEqual(context.systemAudioTap.stopCallCount, 0)
+        XCTAssertEqual(
+            context.microphoneRecorder.handledDeviceChanges,
+            [.defaultOutput, .defaultInput]
+        )
 
         context.lifecycleMonitor = nil
 
         XCTAssertEqual(audioDeviceMonitor.stopCallCount, 1)
+    }
+
+    @MainActor
+    func testFailedAudioDeviceHandoffPreservesActiveRecording() throws {
+        let audioDeviceMonitor = FakeAudioDeviceChangeMonitor()
+        let context = makeLifecycleContext(audioDeviceMonitor: audioDeviceMonitor)
+        context.microphoneRecorder.deviceChangeError = SyntheticDeviceChangeError.failed
+
+        context.store.startRecording()
+        audioDeviceMonitor.triggerChange(.defaultInput)
+
+        try assertInterruptedRecording(
+            in: context.store,
+            sourceSummary: "Interrupted - source files retained after audio device change",
+            noticeText: "could not safely continue"
+        )
+        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 1)
+        XCTAssertEqual(context.systemAudioTap.stopCallCount, 1)
+    }
+
+    @MainActor
+    func testLoopbackInputChangeKeepsPreviousMicrophoneActive() {
+        let audioDeviceMonitor = FakeAudioDeviceChangeMonitor()
+        let route = RouteInspectionBox()
+        let context = makeLifecycleContext(
+            audioDeviceMonitor: audioDeviceMonitor,
+            microphoneRouteInspector: MicrophoneRouteInspector { route.value }
+        )
+
+        context.store.startRecording()
+        route.value = MicrophoneRouteInspection(deviceName: "BlackHole 2ch")
+        audioDeviceMonitor.triggerChange(.defaultInput)
+
+        XCTAssertTrue(context.store.isRecording)
+        XCTAssertEqual(context.microphoneRecorder.stopCallCount, 0)
+        XCTAssertTrue(context.microphoneRecorder.handledDeviceChanges.isEmpty)
+        XCTAssertEqual(context.store.notice?.title, "Microphone Input Not Switched")
     }
 
     @MainActor
@@ -100,7 +139,8 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     private func makeLifecycleContext(
         notificationCenter: NotificationCenter = NotificationCenter(),
         workspaceNotificationCenter: NotificationCenter = NotificationCenter(),
-        audioDeviceMonitor: FakeAudioDeviceChangeMonitor = FakeAudioDeviceChangeMonitor()
+        audioDeviceMonitor: FakeAudioDeviceChangeMonitor = FakeAudioDeviceChangeMonitor(),
+        microphoneRouteInspector: MicrophoneRouteInspector = .permissive
     ) -> LifecycleContext {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let microphoneRecorder = MonitorFakeMicrophoneRecorder()
@@ -110,6 +150,7 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
             microphoneRecorder: microphoneRecorder,
             systemAudioTap: systemAudioTap,
             permissionManager: PermissionManager(currentState: { .ready }),
+            microphoneRouteInspector: microphoneRouteInspector,
             minimumFreeDiskSpaceBytes: 0
         )
         let lifecycleMonitor = RecordingLifecycleMonitor(
@@ -165,8 +206,8 @@ private final class FakeAudioDeviceChangeMonitor: AudioDeviceChangeMonitoring {
     }
 
     @MainActor
-    func triggerChange() {
-        onChange?()
+    func triggerChange(_ change: AudioDeviceChange) {
+        onChange?(change)
     }
 }
 
@@ -194,10 +235,19 @@ private final class MonitorFakeMicrophoneRecorder: MicrophoneRecording {
     var isRecording = false
     var capturedFrameCount: Int64 = 48_000
     var stopCallCount = 0
+    var handledDeviceChanges: [AudioDeviceChange] = []
+    var deviceChangeError: Error?
 
     func startRecording(to url: URL) throws {
         try Data("microphone".utf8).write(to: url)
         isRecording = true
+    }
+
+    func handleDeviceChange(_ change: AudioDeviceChange) throws {
+        handledDeviceChanges.append(change)
+        if let deviceChangeError {
+            throw deviceChangeError
+        }
     }
 
     @discardableResult
@@ -206,4 +256,12 @@ private final class MonitorFakeMicrophoneRecorder: MicrophoneRecording {
         isRecording = false
         return CaptureStopResult(duration: 1, capturedFrameCount: capturedFrameCount)
     }
+}
+
+private enum SyntheticDeviceChangeError: Error {
+    case failed
+}
+
+private final class RouteInspectionBox {
+    var value: MicrophoneRouteInspection?
 }

@@ -28,6 +28,8 @@ Nothing leaves your Mac. The recordings sit on your disk, and what you do with t
 
 Wiretap grabs system audio through ScreenCaptureKit (no virtual audio driver to install) and records the physical default microphone at the same time. When you're on speakers, it keeps the live capture pinned to that physical device and applies voice isolation during finalization, so VoiceChat apps cannot silently replace or stop the microphone graph. On headphones or Bluetooth, it skips the processing and captures raw.
 
+Default input and output changes are handled while recording. Output switches leave capture running, and microphone switches rebind the live writer to the new default device while preserving the recording timeline.
+
 You can start and stop from the menu bar or hit `Cmd+Shift+R` from anywhere. Recordings go into a built-in library where you can play them back, search, rename, export, or share. If your Mac sleeps mid-recording or the app gets killed, the next launch recovers what it can.
 
 The whole project is pure Swift with zero external dependencies. Builds from source with one command.

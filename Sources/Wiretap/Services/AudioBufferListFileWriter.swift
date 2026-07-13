@@ -98,6 +98,24 @@ final class AudioBufferListFileWriter {
         )
     }
 
+    /// Keeps the output timeline stable while capture is rebound between two
+    /// devices whose sample clocks are unrelated. Call this before starting the
+    /// replacement IOProc so the silence is ordered between old and new buffers.
+    func appendHandoffSilence(duration: TimeInterval) {
+        guard duration.isFinite, duration > 0 else { return }
+
+        os_unfair_lock_lock(&inputLock)
+        let format = currentInputFormat
+        expectedNextSampleTime = nil
+        os_unfair_lock_unlock(&inputLock)
+
+        let frameCount = Int64((duration * format.sampleRate).rounded())
+        guard frameCount > 0 else { return }
+        writeQueue.async { [state] in
+            state.writeSilence(frameCount: frameCount, format: format)
+        }
+    }
+
     func write(buffer: AVAudioPCMBuffer, sampleTime: Float64? = nil) {
         updateInputFormat(buffer.format)
         write(inputData: buffer.audioBufferList, sampleTime: sampleTime)

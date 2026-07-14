@@ -21,11 +21,13 @@ Zero dependencies, zero cloud, zero accounts.
 
 Hit record before a Zoom call, a YouTube rabbit hole, or a three-hour podcast. Wiretap captures both sides of the conversation, mixes them together, and drops the file in a searchable library on your Mac.
 
-## Why
+## Download
 
-Most of what I learn comes through audio. Meetings, lectures, long YouTube breakdowns. The problem is it all disappears the moment it ends. Wiretap gives me a file I can keep, transcribe later, or feed into whatever tool I want.
+[![Download Wiretap](https://img.shields.io/badge/Download-Wiretap_0.1.0-2ea44f?style=for-the-badge&logo=apple)](https://github.com/zaidazmi/wiretap/releases/latest/download/Wiretap-0.1.0.dmg)
 
-Nothing leaves your Mac. The recordings sit on your disk, and what you do with them after that is your call.
+Wiretap requires macOS 15 or later. Open the DMG, drag Wiretap into Applications, then grant Microphone and Screen & System Audio Recording access when prompted. macOS may require Wiretap to be relaunched after the system-audio permission is first granted.
+
+The public DMG is signed with Developer ID and notarized by Apple. See the [v0.1.0 release notes](https://github.com/zaidazmi/wiretap/releases/tag/v0.1.0) or download its [SHA-256 checksum](https://github.com/zaidazmi/wiretap/releases/download/v0.1.0/Wiretap-0.1.0.dmg.sha256).
 
 ## How it works
 
@@ -36,14 +38,6 @@ Default input and output changes are handled while recording. Output switches le
 You can start and stop from the menu bar or hit `Cmd+Shift+R` from anywhere. After you stop, the library shows a saving state while it creates the final file. Recordings go into a built-in library where you can play them back at 1×, 1.1×, 1.24×, 1.5×, or 2× speed, search, rename, export, or share. If your Mac sleeps mid-recording or the app gets killed, the next launch recovers what it can.
 
 The whole project is pure Swift with zero external dependencies. Builds from source with one command.
-
-## Download
-
-[![Download Wiretap](https://img.shields.io/badge/Download-Wiretap_0.1.0-2ea44f?style=for-the-badge&logo=apple)](https://github.com/zaidazmi/wiretap/releases/latest/download/Wiretap-0.1.0.dmg)
-
-Wiretap requires macOS 15 or later. Open the DMG, drag Wiretap into Applications, then grant Microphone and Screen & System Audio Recording access when prompted. macOS may require Wiretap to be relaunched after the system-audio permission is first granted.
-
-The public DMG is signed with Developer ID and notarized by Apple. See the [v0.1.0 release notes](https://github.com/zaidazmi/wiretap/releases/tag/v0.1.0) or download its [SHA-256 checksum](https://github.com/zaidazmi/wiretap/releases/download/v0.1.0/Wiretap-0.1.0.dmg.sha256).
 
 ## Build from source
 

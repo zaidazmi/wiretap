@@ -10,7 +10,10 @@ struct AudioMixerWriter {
     private let maximumConsecutiveRenderStalls = 128
     private let microphoneGain: Float
 
-    init(microphoneGain: Float = 1.0) {
+    // Raw physical-device capture does not apply the automatic gain that the
+    // former live voice-processing path supplied. Restore roughly +9.5 dB so
+    // speech remains intelligible beside full-level system audio.
+    init(microphoneGain: Float = 3.0) {
         self.microphoneGain = max(0, microphoneGain)
     }
 

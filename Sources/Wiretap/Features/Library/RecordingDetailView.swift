@@ -10,7 +10,9 @@ struct RecordingDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     detailHeader
-                    if recording.status != .recording {
+                    if recording.status == .processing {
+                        ProcessingRecordingPanel()
+                    } else if recording.status != .recording {
                         PlayerSurface(recording: recording, store: store)
                     }
                     detailSections
@@ -22,10 +24,10 @@ struct RecordingDetailView: View {
             Divider()
 
             RecordingActionBar(
-                canReveal: recording.fileURL != nil || recording.recoveryFolderURL != nil,
-                canExport: recording.fileURL != nil
-                    && recording.status != .recording
-                    && recording.status != .missingFile,
+                canReveal: recording.recoveryFolderURL != nil
+                    || (recording.fileURL != nil && recording.status == .finalized),
+                canExport: recording.fileURL != nil && recording.status == .finalized,
+                canDelete: recording.status != .processing,
                 onReveal: { store.reveal(recording) },
                 onExport: { store.export(recording) },
                 onShare: { store.share(recording) },
@@ -85,7 +87,7 @@ struct RecordingDetailView: View {
 
     @ViewBuilder
     private var titleView: some View {
-        if recording.status == .recording {
+        if recording.status == .recording || recording.status == .processing {
             Text(recording.title)
                 .font(.largeTitle.weight(.semibold))
                 .lineLimit(2)
@@ -170,6 +172,8 @@ private struct PlayerSurface: View {
         switch recording.status {
         case .recording:
             return "Playback is available after the recording is finalized."
+        case .processing:
+            return "Wiretap is still processing this recording."
         case .interrupted:
             return "This item has retained source files but no finalized .m4a yet."
         case .missingFile:
@@ -219,6 +223,22 @@ private struct PlayerSurface: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 }
+
+                Picker(
+                    "Playback speed",
+                    selection: Binding(
+                        get: { store.playbackRate },
+                        set: { store.setPlaybackRate($0) }
+                    )
+                ) {
+                    ForEach(PlaybackRate.allCases) { rate in
+                        Text(rate.label).tag(rate)
+                    }
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                .help("Playback speed")
+                .accessibilityIdentifier(WiretapAccessibility.Detail.playbackSpeedPicker)
             }
 
             if let unavailableMessage {
@@ -251,6 +271,29 @@ private struct PlaybackProgressTrack: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .accessibilityHidden(true)
+    }
+}
+
+private struct ProcessingRecordingPanel: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Saving recording")
+                    .font(.headline)
+                Text("Applying microphone processing and creating the final audio file. Long recordings may take a moment.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Saving recording")
     }
 }
 
@@ -351,6 +394,7 @@ private struct StatusCapsule: View {
         switch status {
         case .finalized: .green
         case .recording: .red
+        case .processing: .accentColor
         case .interrupted: .orange
         case .missingFile: .secondary
         }
@@ -360,6 +404,7 @@ private struct StatusCapsule: View {
 private struct RecordingActionBar: View {
     let canReveal: Bool
     let canExport: Bool
+    let canDelete: Bool
     let onReveal: () -> Void
     let onExport: () -> Void
     let onShare: () -> Void
@@ -390,6 +435,7 @@ private struct RecordingActionBar: View {
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
+            .disabled(!canDelete)
             .accessibilityIdentifier(WiretapAccessibility.Detail.deleteButton)
         }
         .buttonStyle(.bordered)

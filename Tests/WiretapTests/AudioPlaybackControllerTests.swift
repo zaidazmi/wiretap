@@ -118,6 +118,32 @@ final class AudioPlaybackControllerTests: XCTestCase {
         XCTAssertFalse(controller.isPlaying)
     }
 
+    @MainActor
+    func testPlaybackRateAppliesBeforeStartAndChangesDuringPlayback() throws {
+        let fileURL = temporaryDirectory.appendingPathComponent("playback-rate.m4a")
+        try Data("audio".utf8).write(to: fileURL)
+        let recording = makeRecording(fileURL: fileURL)
+        let player = FakeAudioPlayer(duration: 10)
+        let controller = AudioPlaybackController(makePlayer: { _ in player })
+
+        controller.setPlaybackRate(.onePointTwentyFour)
+        try controller.toggle(recording: recording)
+
+        XCTAssertEqual(controller.playbackRate, .onePointTwentyFour)
+        XCTAssertTrue(player.enableRate)
+        XCTAssertEqual(player.rate, 1.24, accuracy: 0.001)
+
+        controller.setPlaybackRate(.double)
+
+        XCTAssertEqual(controller.playbackRate, .double)
+        XCTAssertEqual(player.rate, 2, accuracy: 0.001)
+    }
+
+    func testPlaybackRateOptionsMatchSupportedSpeeds() {
+        XCTAssertEqual(PlaybackRate.allCases.map(\.rawValue), [1, 1.1, 1.24, 1.5, 2])
+        XCTAssertEqual(PlaybackRate.allCases.map(\.label), ["1×", "1.1×", "1.24×", "1.5×", "2×"])
+    }
+
     private func makeRecording(fileURL: URL) -> Recording {
         Recording(
             title: "Playback",
@@ -139,6 +165,8 @@ private final class FakeAudioPlayer: AudioPlaying {
     var isPlaying = false
     var currentTime: TimeInterval = 0
     let duration: TimeInterval
+    var enableRate = false
+    var rate: Float = 1
     var canPlay = true
     var prepareToPlayCallCount = 0
     var playCallCount = 0

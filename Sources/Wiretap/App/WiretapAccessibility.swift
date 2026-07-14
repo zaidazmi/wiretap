@@ -48,6 +48,7 @@ enum WiretapAccessibility {
         static let player = "wiretap.detail.player"
         static let playPauseButton = "wiretap.detail.player.playPause"
         static let seekSlider = "wiretap.detail.player.seek"
+        static let playbackSpeedPicker = "wiretap.detail.player.speed"
         static let revealButton = "wiretap.detail.reveal"
         static let exportButton = "wiretap.detail.export"
         static let shareButton = "wiretap.detail.share"

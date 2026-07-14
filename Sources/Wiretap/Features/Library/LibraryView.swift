@@ -113,9 +113,37 @@ private struct LibraryStatusStrip: View {
     var body: some View {
         if store.isRecording {
             activeBody
+        } else if store.isProcessingRecording {
+            processingBody
         } else {
             idleBody
         }
+    }
+
+    private var processingBody: some View {
+        HStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+                .frame(width: 48, height: 48)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.recordingTitle)
+                    .font(.headline)
+                Text(store.recordingSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 16)
+
+            LibraryMetric(title: "Recorded", value: store.statusTimeText, emphasis: true)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 13)
+        .background(Color.accentColor.opacity(0.08))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Saving recording")
+        .accessibilityIdentifier(WiretapAccessibility.Library.statusStrip)
     }
 
     private var activeBody: some View {
@@ -185,7 +213,7 @@ private struct LibraryStatusStrip: View {
     private var idleBody: some View {
         HStack(spacing: 16) {
             HStack(spacing: 10) {
-                RecordingStatusBadge(isRecording: false)
+                RecordingStatusBadge(isRecording: false, isProcessing: false)
                     .font(.title3)
 
                 VStack(alignment: .leading, spacing: 2) {

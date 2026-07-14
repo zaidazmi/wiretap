@@ -23,7 +23,7 @@ struct RecordingControlView: View {
         Button {
             store.toggleRecording()
         } label: {
-            Label(buttonTitle, systemImage: store.isRecording ? "stop.fill" : "record.circle")
+            Label(buttonTitle, systemImage: buttonSystemImage)
                 .frame(maxWidth: style == .menuBar ? .infinity : nil)
         }
         .tint(store.isRecording ? .red : .accentColor)
@@ -33,11 +33,20 @@ struct RecordingControlView: View {
     }
 
     private var buttonTitle: String {
+        if store.isProcessingRecording {
+            return "Saving…"
+        }
+
         if store.isRecording {
             return style == .menuBar ? "Stop \(store.elapsedText)" : "Stop Recording"
         }
 
         return "Record"
+    }
+
+    private var buttonSystemImage: String {
+        if store.isProcessingRecording { return "hourglass" }
+        return store.isRecording ? "stop.fill" : "record.circle"
     }
 
     private var accessibilityIdentifier: String {
@@ -52,10 +61,15 @@ struct RecordingControlView: View {
 
 struct RecordingStatusBadge: View {
     let isRecording: Bool
+    var isProcessing = false
 
     var body: some View {
         if isRecording {
             LiveRecordingGlyph(size: 36)
+        } else if isProcessing {
+            ProgressView()
+                .controlSize(.regular)
+                .frame(width: 36, height: 36)
         } else {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 30, weight: .semibold))

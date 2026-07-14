@@ -356,6 +356,12 @@ final class WiretapStoreTests: XCTestCase {
 
         store.stopRecording()
 
+        XCTAssertFalse(store.isRecording)
+        XCTAssertTrue(store.isProcessingRecording)
+        XCTAssertFalse(store.canRecord)
+        XCTAssertEqual(store.recordings.first?.status, .processing)
+        XCTAssertEqual(store.recordingTitle, "Saving recording")
+
         try await waitUntil("recording finalizes") {
             store.recordings.first?.status == .finalized
         }
@@ -375,6 +381,22 @@ final class WiretapStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: microphoneURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: systemAudioURL.path))
         XCTAssertNil(store.notice)
+        XCTAssertFalse(store.isProcessingRecording)
+        XCTAssertTrue(store.canRecord)
+    }
+
+    @MainActor
+    func testPlaybackRateSelectionIsForwardedToController() {
+        let playbackController = FakePlaybackController()
+        let store = WiretapStore(
+            playbackController: playbackController,
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.setPlaybackRate(.onePointTwentyFour)
+
+        XCTAssertEqual(store.playbackRate, .onePointTwentyFour)
+        XCTAssertEqual(playbackController.playbackRate, .onePointTwentyFour)
     }
 
     @MainActor
@@ -1242,6 +1264,7 @@ private final class FakePlaybackController: AudioPlaybackControlling {
     var isPlaying = false
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
+    var playbackRate: PlaybackRate = .normal
 
     func toggle(recording: Recording) throws {
         recordingID = recording.id
@@ -1250,6 +1273,10 @@ private final class FakePlaybackController: AudioPlaybackControlling {
 
     func seek(to progress: Double) {
         currentTime = duration * max(0, min(1, progress))
+    }
+
+    func setPlaybackRate(_ rate: PlaybackRate) {
+        playbackRate = rate
     }
 
     func stop() {

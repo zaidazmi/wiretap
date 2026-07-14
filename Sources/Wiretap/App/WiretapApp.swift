@@ -31,9 +31,10 @@ struct WiretapApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button(store.isRecording ? "Stop Recording" : "Start Recording") {
+                Button(store.isRecording ? "Stop Recording" : store.isProcessingRecording ? "Saving Recording…" : "Start Recording") {
                     store.toggleRecording()
                 }
+                .disabled(store.isProcessingRecording)
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .accessibilityIdentifier(WiretapAccessibility.Command.recordToggle)
 
@@ -53,7 +54,7 @@ private struct MenuBarLabelView: View {
     @State private var didOpenInitialPermissions = false
 
     var body: some View {
-        Image(systemName: store.isRecording ? "record.circle.fill" : "waveform.circle")
+        Image(systemName: store.isRecording ? "record.circle.fill" : store.isProcessingRecording ? "hourglass.circle" : "waveform.circle")
             .symbolRenderingMode(store.isRecording ? .multicolor : .hierarchical)
             .accessibilityIdentifier(WiretapAccessibility.MenuBar.statusItem)
             .task {

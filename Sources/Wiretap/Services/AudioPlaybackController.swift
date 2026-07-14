@@ -7,9 +7,11 @@ protocol AudioPlaybackControlling: AnyObject {
     var isPlaying: Bool { get }
     var currentTime: TimeInterval { get }
     var duration: TimeInterval { get }
+    var playbackRate: PlaybackRate { get }
 
     func toggle(recording: Recording) throws
     func seek(to progress: Double)
+    func setPlaybackRate(_ rate: PlaybackRate)
     func stop()
 }
 
@@ -18,6 +20,8 @@ protocol AudioPlaying: AnyObject {
     var isPlaying: Bool { get }
     var currentTime: TimeInterval { get set }
     var duration: TimeInterval { get }
+    var enableRate: Bool { get set }
+    var rate: Float { get set }
 
     func prepareToPlay() -> Bool
     func play() -> Bool
@@ -26,6 +30,26 @@ protocol AudioPlaying: AnyObject {
 }
 
 extension AVAudioPlayer: AudioPlaying {}
+
+enum PlaybackRate: Double, CaseIterable, Identifiable, Sendable {
+    case normal = 1.0
+    case onePointOne = 1.1
+    case onePointTwentyFour = 1.24
+    case onePointFive = 1.5
+    case double = 2.0
+
+    var id: Double { rawValue }
+
+    var label: String {
+        switch self {
+        case .normal: "1×"
+        case .onePointOne: "1.1×"
+        case .onePointTwentyFour: "1.24×"
+        case .onePointFive: "1.5×"
+        case .double: "2×"
+        }
+    }
+}
 
 enum AudioPlaybackError: LocalizedError {
     case playbackCouldNotStart
@@ -43,6 +67,7 @@ final class AudioPlaybackController: AudioPlaybackControlling {
     private let makePlayer: (URL) throws -> any AudioPlaying
     private var player: (any AudioPlaying)?
     private(set) var recordingID: Recording.ID?
+    private(set) var playbackRate: PlaybackRate = .normal
 
     init(makePlayer: @escaping (URL) throws -> any AudioPlaying = { url in
         try AVAudioPlayer(contentsOf: url)
@@ -94,6 +119,11 @@ final class AudioPlaybackController: AudioPlaybackControlling {
         player.currentTime = max(0, min(player.duration, player.duration * progress))
     }
 
+    func setPlaybackRate(_ rate: PlaybackRate) {
+        playbackRate = rate
+        configureRate(for: player)
+    }
+
     func stop() {
         player?.stop()
         player = nil
@@ -101,8 +131,15 @@ final class AudioPlaybackController: AudioPlaybackControlling {
     }
 
     private func start(_ player: any AudioPlaying) throws {
+        configureRate(for: player)
         guard player.play() else {
             throw AudioPlaybackError.playbackCouldNotStart
         }
+    }
+
+    private func configureRate(for player: (any AudioPlaying)?) {
+        guard let player else { return }
+        player.enableRate = true
+        player.rate = Float(playbackRate.rawValue)
     }
 }

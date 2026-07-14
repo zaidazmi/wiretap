@@ -197,8 +197,13 @@ final class WiretapStore {
     var isPlaying = false
     var playbackTime: TimeInterval = 0
     var playbackDuration: TimeInterval = 0
+    var playbackRate: PlaybackRate = .normal
     var systemAudioState: CaptureSourceState = .notChecked
     var microphoneState: CaptureSourceState = .notChecked
+
+    var isProcessingRecording: Bool {
+        recordings.contains { $0.status == .processing }
+    }
 
     @ObservationIgnored private let repository: RecordingLibraryRepository
     @ObservationIgnored private let microphoneRecorder: any MicrophoneRecording
@@ -240,6 +245,7 @@ final class WiretapStore {
         self.repository = repository
         self.microphoneRecorder = microphoneRecorder
         self.playbackController = playbackController
+        self.playbackRate = playbackController.playbackRate
         self.systemAudioTap = systemAudioTap
         self.mixerWriter = mixerWriter
         self.permissionManager = permissionManager
@@ -287,12 +293,18 @@ final class WiretapStore {
     }
 
     var recordingTitle: String {
-        isRecording ? "Recording in progress" : "Ready to record"
+        if isRecording { return "Recording in progress" }
+        if isProcessingRecording { return "Saving recording" }
+        return "Ready to record"
     }
 
     var recordingSubtitle: String {
         if isRecording {
             return "\(Recording.sourceSummary(for: Array(activeCaptureSources))) capture active"
+        }
+
+        if isProcessingRecording {
+            return "Applying audio processing and creating the final file"
         }
 
         if permissionState != .ready {
@@ -346,7 +358,12 @@ final class WiretapStore {
     }
 
     var canRecord: Bool {
-        permissionState != .denied
+        permissionState != .denied && !isProcessingRecording
+    }
+
+    var statusTimeText: String {
+        if isRecording { return elapsedText }
+        return recordings.first(where: { $0.status == .processing })?.durationText ?? "00:00"
     }
 
     var isTimelineActive: Bool {
@@ -385,6 +402,7 @@ final class WiretapStore {
     }
 
     func toggleRecording() {
+        guard !isProcessingRecording else { return }
         isRecording ? stopRecording() : startRecording()
     }
 
@@ -397,6 +415,14 @@ final class WiretapStore {
     }
 
     func startRecording() {
+        guard !isProcessingRecording else {
+            notice = WiretapNotice(
+                title: "Recording Is Still Saving",
+                message: "Wait for the current recording to finish processing before starting another one."
+            )
+            return
+        }
+
         permissionState = permissionManager.currentState()
 
         guard canRecord else {
@@ -581,7 +607,9 @@ final class WiretapStore {
               let index = recordings.firstIndex(where: { $0.id == selectedRecordingID })
         else { return }
 
-        guard recordings[index].status != .recording else { return }
+        guard recordings[index].status != .recording,
+              recordings[index].status != .processing
+        else { return }
 
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return }
@@ -599,6 +627,8 @@ final class WiretapStore {
     }
 
     func delete(_ recording: Recording) {
+        guard recording.status != .processing else { return }
+
         do {
             if playbackRecordingID == recording.id {
                 stopPlayback()
@@ -685,6 +715,11 @@ final class WiretapStore {
         } else {
             pendingPlaybackProgress[recording.id] = clampedProgress
         }
+    }
+
+    func setPlaybackRate(_ rate: PlaybackRate) {
+        playbackController.setPlaybackRate(rate)
+        playbackRate = playbackController.playbackRate
     }
 
     func playbackProgress(for recording: Recording) -> Double {
@@ -899,15 +934,41 @@ final class WiretapStore {
         reason: RecordingStopReason,
         finalization: RecordingFinalizationStrategy
     ) {
-        guard isRecording else { return }
+        guard isRecording,
+              let id = activeRecordingID,
+              let finalURL = activeFinalURL,
+              let microphoneURL = activeMicrophoneURL,
+              let systemAudioURL = activeSystemAudioURL
+        else { return }
 
         let stoppedAt = Date()
-        let microphoneResult = microphoneRecorder.stopRecording()
-        let systemAudioResult = systemAudioTap.stop()
-        let duration = max(elapsedSeconds, microphoneResult.duration, systemAudioResult.duration, 1)
         let title = reason.recordingTitle(createdAt: stoppedAt)
         let captureSources = activeCaptureSources
         let sourceStartDates = activeSourceStartDates
+        let createdAt = recordings.first(where: { $0.id == id })?.createdAt ?? stoppedAt
+
+        if case .mixSources = finalization {
+            upsertRecording(
+                Recording(
+                    id: id,
+                    title: title,
+                    createdAt: createdAt,
+                    duration: max(elapsedSeconds, 1),
+                    fileURL: finalURL,
+                    fileSizeBytes: 0,
+                    sampleRate: 48_000,
+                    channelCount: 2,
+                    sourceSummary: Recording.sourceSummary(for: Array(captureSources)),
+                    status: .processing
+                )
+            )
+            selectedRecordingID = id
+            saveLibrary()
+        }
+
+        let microphoneResult = microphoneRecorder.stopRecording()
+        let systemAudioResult = systemAudioTap.stop()
+        let duration = max(elapsedSeconds, microphoneResult.duration, systemAudioResult.duration, 1)
         let captureWriteError = captureWriteFailure(
             captureSources: captureSources,
             microphoneResult: microphoneResult,
@@ -935,14 +996,6 @@ final class WiretapStore {
             setCaptureState(.unavailable, for: missingCaptureSource)
         }
 
-        guard let id = activeRecordingID,
-              let finalURL = activeFinalURL,
-              let microphoneURL = activeMicrophoneURL,
-              let systemAudioURL = activeSystemAudioURL
-        else {
-            resetRecordingState()
-            return
-        }
         logger.info(
             "Stopping recording id=\(id.uuidString, privacy: .public) reason=\(reason.diagnosticName, privacy: .public) finalization=\(finalization.diagnosticName, privacy: .public) elapsed=\(duration, privacy: .public) activeSources=\(WiretapLog.sourceSummary(captureSources), privacy: .public) capturedSources=\(WiretapLog.sourceSummary(capturedSources), privacy: .public) micFrames=\(microphoneResult.capturedFrameCount, privacy: .public) systemFrames=\(systemAudioResult.capturedFrameCount, privacy: .public) micDropped=\(microphoneResult.droppedFrameCount, privacy: .public) systemDropped=\(systemAudioResult.droppedFrameCount, privacy: .public)"
         )
@@ -1010,6 +1063,7 @@ final class WiretapStore {
                 await finalizeRecording(
                     id: id,
                     title: title,
+                    createdAt: createdAt,
                     durationFallback: duration,
                     finalURL: finalURL,
                     inputs: inputs,
@@ -1144,6 +1198,7 @@ final class WiretapStore {
     private func finalizeRecording(
         id: Recording.ID,
         title: String,
+        createdAt: Date,
         durationFallback: TimeInterval,
         finalURL: URL,
         inputs: [AudioMixerInput],
@@ -1161,7 +1216,7 @@ final class WiretapStore {
             let recording = Recording(
                 id: id,
                 title: title,
-                createdAt: Date(),
+                createdAt: createdAt,
                 duration: max(mixResult.duration, durationFallback, 1),
                 fileURL: finalURL,
                 fileSizeBytes: fileSize,

@@ -286,6 +286,38 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(refreshed.first?.fileSizeBytes, repository.fileSize(for: finalURL))
     }
 
+    func testRefreshedFileStatusesRecoversProcessingRowAfterRelaunch() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let finalURL = try repository.recordingURL(for: id)
+        let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+        let systemURL = try repository.temporarySourceURL(for: id, source: "system")
+        try Data("mic".utf8).write(to: microphoneURL)
+        try Data("system".utf8).write(to: systemURL)
+        let processingRecording = Recording(
+            id: id,
+            title: "Processing",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 120,
+            fileURL: finalURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .processing
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [processingRecording])
+
+        XCTAssertEqual(refreshed.first?.status, .interrupted)
+        XCTAssertNil(refreshed.first?.fileURL)
+        XCTAssertNotNil(refreshed.first?.recoveryFolderURL)
+        XCTAssertEqual(
+            refreshed.first?.sourceSummary,
+            RecordingInterruptionReason.unexpectedShutdown.recoverySummary
+        )
+    }
+
     func testRefreshedFileStatusesRetainsActiveRecordingSourceFiles() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()

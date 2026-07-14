@@ -45,6 +45,7 @@ struct RecordingRowView: View {
         switch recording.status {
         case .finalized: "checkmark"
         case .recording: "record.circle.fill"
+        case .processing: "hourglass"
         case .interrupted: "exclamationmark"
         case .missingFile: "questionmark"
         }
@@ -54,6 +55,7 @@ struct RecordingRowView: View {
         switch recording.status {
         case .finalized: .green
         case .recording: .red
+        case .processing: .accentColor
         case .interrupted: .orange
         case .missingFile: .secondary
         }

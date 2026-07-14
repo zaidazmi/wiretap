@@ -99,7 +99,7 @@ struct RecordingLibraryRepository {
                     refreshed.fileSizeBytes = fileSize(for: fileURL)
                 }
 
-            case .recording:
+            case .recording, .processing:
                 if let fileURL = recording.fileURL,
                    FileManager.default.fileExists(atPath: fileURL.path) {
                     refreshed.status = .finalized

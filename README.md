@@ -30,7 +30,7 @@ Wiretap grabs system audio through ScreenCaptureKit (no virtual audio driver to 
 
 Default input and output changes are handled while recording. Output switches leave capture running, and microphone switches rebind the live writer to the new default device while preserving the recording timeline.
 
-You can start and stop from the menu bar or hit `Cmd+Shift+R` from anywhere. Recordings go into a built-in library where you can play them back, search, rename, export, or share. If your Mac sleeps mid-recording or the app gets killed, the next launch recovers what it can.
+You can start and stop from the menu bar or hit `Cmd+Shift+R` from anywhere. After you stop, the library shows a saving state while it creates the final file. Recordings go into a built-in library where you can play them back at 1×, 1.1×, 1.24×, 1.5×, or 2× speed, search, rename, export, or share. If your Mac sleeps mid-recording or the app gets killed, the next launch recovers what it can.
 
 The whole project is pure Swift with zero external dependencies. Builds from source with one command.
 

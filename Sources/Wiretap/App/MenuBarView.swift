@@ -75,7 +75,10 @@ private struct MenuHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            RecordingStatusBadge(isRecording: store.isRecording)
+            RecordingStatusBadge(
+                isRecording: store.isRecording,
+                isProcessing: store.isProcessingRecording
+            )
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Wiretap")
@@ -87,14 +90,20 @@ private struct MenuHeader: View {
 
             Spacer()
 
-            Text(store.isRecording ? "Live" : "Idle")
+            Text(store.isRecording ? "Live" : store.isProcessingRecording ? "Saving" : "Idle")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(store.isRecording ? .red : .secondary)
+                .foregroundStyle(store.isRecording ? .red : store.isProcessingRecording ? Color.accentColor : .secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
                     Capsule()
-                        .fill(store.isRecording ? Color.red.opacity(0.12) : Color.secondary.opacity(0.12))
+                        .fill(
+                            store.isRecording
+                                ? Color.red.opacity(0.12)
+                                : store.isProcessingRecording
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color.secondary.opacity(0.12)
+                        )
                 )
                 .accessibilityIdentifier(WiretapAccessibility.MenuBar.status)
         }
@@ -110,7 +119,7 @@ private struct MenuRecordingPanel: View {
             Text(store.recordingTitle)
                 .font(.subheadline.weight(.semibold))
 
-            Text(store.isRecording ? store.elapsedText : "00:00")
+            Text(store.statusTimeText)
                 .font(.system(size: 38, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .contentTransition(.numericText())

@@ -16,6 +16,7 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
     enum Status: String, Codable, CaseIterable, Sendable {
         case finalized
         case recording
+        case processing
         case interrupted
         case missingFile
 
@@ -23,6 +24,7 @@ struct Recording: Identifiable, Hashable, Codable, Sendable {
             switch self {
             case .finalized: "Ready"
             case .recording: "Recording"
+            case .processing: "Processing"
             case .interrupted: "Needs Review"
             case .missingFile: "Missing File"
             }

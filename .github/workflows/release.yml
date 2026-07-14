@@ -75,6 +75,7 @@ jobs:
         run: |
           WIRETAP_VERIFY_SKIP_TESTS=1 \
           WIRETAP_VERIFY_SKIP_BUILD=1 \
+          WIRETAP_VERIFY_REQUIRE_DMG_SIGNATURE=1 \
           WIRETAP_VERIFY_REQUIRE_NOTARIZATION=1 \
           Scripts/verify-release.sh release
 
@@ -84,12 +85,22 @@ jobs:
         run: |
           VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Packaging/Info.plist)"
           DMG_PATH=".build/dist/Wiretap-$VERSION.dmg"
+          CHECKSUM_PATH="$DMG_PATH.sha256"
+          NOTES_PATH=".github/release-notes/$GITHUB_REF_NAME.md"
+          (
+            cd "$(dirname "$DMG_PATH")"
+            shasum -a 256 "$(basename "$DMG_PATH")" > "$(basename "$CHECKSUM_PATH")"
+          )
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$DMG_PATH" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" "$DMG_PATH" \
+            gh release edit "$GITHUB_REF_NAME" \
               --title "Wiretap $VERSION" \
-              --notes "Signed and notarized Wiretap $VERSION DMG."
+              --notes-file "$NOTES_PATH"
+            gh release upload "$GITHUB_REF_NAME" "$DMG_PATH" "$CHECKSUM_PATH" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$DMG_PATH" "$CHECKSUM_PATH" \
+              --title "Wiretap $VERSION" \
+              --notes-file "$NOTES_PATH" \
+              --verify-tag
           fi
 
       - name: Delete temporary keychain

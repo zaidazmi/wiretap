@@ -36,7 +36,7 @@ You can start and stop from the menu bar or hit `Cmd+Shift+R` from anywhere. Aft
 
 The whole project is pure Swift with zero external dependencies. Builds from source with one command.
 
-## Get started
+## Build from source
 
 ```sh
 swift run Wiretap          # run from source
@@ -51,7 +51,7 @@ Requires macOS 15+ and will ask for Microphone and Screen Recording permissions 
 Scripts/package-dmg.sh debug
 ```
 
-See the [release docs](Scripts/) for signing, notarization, and CI details.
+See the [release docs](Scripts/README.md) for signing, notarization, and CI details.
 
 ## Tests
 

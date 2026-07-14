@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="Assets/WiretapIcon.png" width="128" height="128" alt="Wiretap app icon">
+
 # Wiretap
 
 **Record everything you hear. Keep everything local.**

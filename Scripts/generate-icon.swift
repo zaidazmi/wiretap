@@ -4,12 +4,15 @@ import AppKit
 import Foundation
 
 let arguments = CommandLine.arguments
-guard arguments.count == 2 else {
-    fputs("usage: generate-icon.swift <output.icns>\n", stderr)
+guard (2...3).contains(arguments.count) else {
+    fputs("usage: generate-icon.swift <output.icns> [preview.png]\n", stderr)
     exit(64)
 }
 
 let outputURL = URL(fileURLWithPath: arguments[1])
+let previewURL = arguments.count == 3
+    ? URL(fileURLWithPath: arguments[2])
+    : nil
 let fileManager = FileManager.default
 let iconsetURL = outputURL
     .deletingPathExtension()
@@ -52,6 +55,18 @@ for iconSize in iconSizes {
     }
 
     try pngData.write(to: iconsetURL.appendingPathComponent(iconSize.name))
+}
+
+if let previewURL {
+    try fileManager.createDirectory(
+        at: previewURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    let sourceURL = iconsetURL.appendingPathComponent("icon_128x128@2x.png")
+    if fileManager.fileExists(atPath: previewURL.path) {
+        try fileManager.removeItem(at: previewURL)
+    }
+    try fileManager.copyItem(at: sourceURL, to: previewURL)
 }
 
 let process = Process()
@@ -109,36 +124,4 @@ private func drawIcon(in rect: CGRect) {
     )
     NSColor(calibratedRed: 1.0, green: 0.27, blue: 0.27, alpha: 1).setFill()
     recordPath.fill()
-
-    drawWave(
-        center: CGPoint(x: rect.midX, y: rect.midY),
-        width: rect.width * 0.66,
-        height: rect.height * 0.22,
-        lineWidth: rect.width * 0.035
-    )
-}
-
-private func drawWave(center: CGPoint, width: CGFloat, height: CGFloat, lineWidth: CGFloat) {
-    let path = NSBezierPath()
-    let segments = 72
-    let startX = center.x - width / 2
-
-    for index in 0...segments {
-        let progress = CGFloat(index) / CGFloat(segments)
-        let x = startX + width * progress
-        let wave = sin(progress * CGFloat.pi * 4)
-        let y = center.y + wave * height * 0.5
-
-        if index == 0 {
-            path.move(to: CGPoint(x: x, y: y))
-        } else {
-            path.line(to: CGPoint(x: x, y: y))
-        }
-    }
-
-    path.lineCapStyle = .round
-    path.lineJoinStyle = .round
-    path.lineWidth = lineWidth
-    NSColor(calibratedWhite: 1, alpha: 0.92).setStroke()
-    path.stroke()
 }

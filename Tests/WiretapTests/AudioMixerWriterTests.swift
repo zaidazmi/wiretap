@@ -90,6 +90,45 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertEqual(outputFile.length, 9_600)
         XCTAssertEqual(result.rawMetrics.sampleCount, 9_600)
         XCTAssertEqual(result.processedMetrics.sampleCount, 9_600)
+        XCTAssertTrue(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(result))
+    }
+
+    func testSoundIsolationPolicyRejectsTruncatedOrSilentlyZeroedVoice() {
+        let raw = AudioSignalMetrics(
+            peak: 0.4,
+            rootMeanSquare: 0.1,
+            nonzeroSampleCount: 47_000,
+            sampleCount: 48_000
+        )
+
+        XCTAssertFalse(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(
+            OfflineMicrophoneProcessingResult(
+                rawMetrics: raw,
+                processedMetrics: AudioSignalMetrics(
+                    peak: 0.2,
+                    rootMeanSquare: 0.05,
+                    nonzeroSampleCount: 23_000,
+                    sampleCount: 24_000
+                )
+            )
+        ))
+        XCTAssertFalse(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(
+            OfflineMicrophoneProcessingResult(
+                rawMetrics: raw,
+                processedMetrics: AudioSignalMetrics(sampleCount: 48_000)
+            )
+        ))
+    }
+
+    func testSoundIsolationPolicyAcceptsCompleteSilenceForSilentInput() {
+        let silent = AudioSignalMetrics(sampleCount: 48_000)
+
+        XCTAssertTrue(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(
+            OfflineMicrophoneProcessingResult(
+                rawMetrics: silent,
+                processedMetrics: silent
+            )
+        ))
     }
 
     func testMixCombinesSourcesIntoSingleM4A() async throws {

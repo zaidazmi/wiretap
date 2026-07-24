@@ -86,6 +86,9 @@ struct AudioMixerWriter {
                         inputURL: input.url,
                         outputURL: processedURL
                     )
+                    guard OfflineMicrophoneProcessingPolicy.shouldUseProcessed(result) else {
+                        throw OfflineMicrophoneProcessorError.unusableOutput
+                    }
                     logger.info(
                         "Microphone post-processing=sound-isolation rawPeak=\(result.rawMetrics.peak, privacy: .public) rawRMS=\(result.rawMetrics.rootMeanSquare, privacy: .public) rawNonzero=\(result.rawMetrics.nonzeroSampleCount, privacy: .public)/\(result.rawMetrics.sampleCount, privacy: .public) processedPeak=\(result.processedMetrics.peak, privacy: .public) processedRMS=\(result.processedMetrics.rootMeanSquare, privacy: .public) processedNonzero=\(result.processedMetrics.nonzeroSampleCount, privacy: .public)/\(result.processedMetrics.sampleCount, privacy: .public)"
                     )

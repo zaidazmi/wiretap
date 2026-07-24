@@ -244,6 +244,40 @@ struct OfflineMicrophoneProcessingResult: Equatable {
     var processedMetrics: AudioSignalMetrics
 }
 
+enum OfflineMicrophoneProcessingPolicy {
+    static func shouldUseProcessed(_ result: OfflineMicrophoneProcessingResult) -> Bool {
+        let raw = result.rawMetrics
+        let processed = result.processedMetrics
+
+        guard metricsAreValid(raw),
+              metricsAreValid(processed),
+              raw.sampleCount > 0,
+              processed.sampleCount == raw.sampleCount
+        else { return false }
+
+        // A valid isolation pass can remove most speaker bleed, but a complete
+        // digital-zero result from a meaningful raw signal indicates that the
+        // Audio Unit failed silently. Preserve the raw microphone in that case.
+        let rawHasMeaningfulSignal = raw.peak >= 0.000_1
+            || raw.rootMeanSquare >= 0.000_01
+        if rawHasMeaningfulSignal, processed.nonzeroSampleCount == 0 {
+            return false
+        }
+
+        return true
+    }
+
+    private static func metricsAreValid(_ metrics: AudioSignalMetrics) -> Bool {
+        metrics.peak.isFinite
+            && metrics.peak >= 0
+            && metrics.rootMeanSquare.isFinite
+            && metrics.rootMeanSquare >= 0
+            && metrics.sampleCount >= 0
+            && metrics.nonzeroSampleCount >= 0
+            && metrics.nonzeroSampleCount <= metrics.sampleCount
+    }
+}
+
 struct AudioSignalMetrics: Equatable {
     var peak: Float = 0
     var rootMeanSquare: Float = 0
@@ -290,6 +324,7 @@ enum OfflineMicrophoneProcessorError: LocalizedError {
     case couldNotCreateBuffer
     case renderStalled
     case renderFailed
+    case unusableOutput
 
     var errorDescription: String? {
         switch self {
@@ -301,6 +336,8 @@ enum OfflineMicrophoneProcessorError: LocalizedError {
             "Wiretap's microphone processing stopped making progress."
         case .renderFailed:
             "Wiretap could not apply microphone voice isolation."
+        case .unusableOutput:
+            "Wiretap sound isolation returned an incomplete or empty microphone signal."
         }
     }
 }

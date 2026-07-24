@@ -320,6 +320,64 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testStartRecordingStopsWiretapPlaybackBeforeCapture() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let playbackController = FakePlaybackController()
+        playbackController.recordingID = UUID()
+        playbackController.isPlaying = true
+        playbackController.duration = 30
+        playbackController.currentTime = 12
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: FakeMicrophoneRecorder(),
+            playbackController: playbackController,
+            systemAudioTap: FakeSystemAudioTap(),
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+        store.tick()
+        XCTAssertTrue(store.isPlaying)
+
+        store.startRecording()
+        try await waitForRecordingStart(store)
+
+        XCTAssertTrue(store.isRecording)
+        XCTAssertFalse(store.isPlaying)
+        XCTAssertNil(playbackController.recordingID)
+        XCTAssertFalse(playbackController.isPlaying)
+
+        store.preserveInterruptedRecording(reason: .appTermination)
+    }
+
+    @MainActor
+    func testPlaybackCannotStartDuringActiveRecording() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let playbackController = FakePlaybackController()
+        let playableRecording = makeRecording(title: "Previous Recording")
+        let store = WiretapStore(
+            recordings: [playableRecording],
+            repository: repository,
+            microphoneRecorder: FakeMicrophoneRecorder(),
+            playbackController: playbackController,
+            systemAudioTap: FakeSystemAudioTap(),
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+        try await waitForRecordingStart(store)
+        store.togglePlayback(for: playableRecording)
+        store.seekPlayback(for: playableRecording, progress: 0.5)
+
+        XCTAssertTrue(store.isRecording)
+        XCTAssertNil(playbackController.recordingID)
+        XCTAssertFalse(playbackController.isPlaying)
+        XCTAssertNil(store.pendingPlaybackProgress[playableRecording.id])
+
+        store.preserveInterruptedRecording(reason: .appTermination)
+    }
+
+    @MainActor
     func testToggleRecordingCancelsPendingSystemAudioStartup() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(startDelay: .seconds(1))

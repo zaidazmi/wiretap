@@ -446,6 +446,10 @@ final class WiretapStore {
             return
         }
 
+        // Wiretap excludes its own process from system capture, but its
+        // playback would still leak acoustically into a speaker-fed
+        // microphone. Stop any preview before capture begins.
+        stopPlayback()
         isStartingRecording = true
         recordingStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -789,6 +793,8 @@ final class WiretapStore {
     }
 
     func togglePlayback(for recording: Recording) {
+        guard !isStartingRecording, !isRecording else { return }
+
         do {
             let requestedProgress = pendingPlaybackProgress[recording.id]
             try playbackController.toggle(recording: recording)
@@ -805,6 +811,8 @@ final class WiretapStore {
     }
 
     func seekPlayback(for recording: Recording, progress: Double) {
+        guard !isStartingRecording, !isRecording else { return }
+
         let clampedProgress = min(1, max(0, progress))
 
         if playbackRecordingID == recording.id {

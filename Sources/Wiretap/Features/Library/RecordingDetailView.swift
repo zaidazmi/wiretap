@@ -199,7 +199,7 @@ private struct PlayerSurface: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .clipShape(Circle())
-                .disabled(!isPlayable)
+                .disabled(!isPlayable || store.isStartingRecording || store.isRecording)
                 .help(isCurrentRecording && store.isPlaying ? "Pause" : "Play")
                 .accessibilityIdentifier(WiretapAccessibility.Detail.playPauseButton)
 
@@ -212,7 +212,7 @@ private struct PlayerSurface: View {
                         in: 0...1
                     )
                     .accessibilityLabel("Playback position")
-                    .disabled(!isPlayable)
+                    .disabled(!isPlayable || store.isStartingRecording || store.isRecording)
                     .accessibilityIdentifier(WiretapAccessibility.Detail.seekSlider)
 
                     HStack {

@@ -8,7 +8,10 @@ struct CaptureStopResult {
     var microphonePostProcessing: MicrophonePostProcessing = .none
 
     var didCaptureFrames: Bool {
-        capturedFrameCount > 0
+        // The writer includes rejected frames in capturedFrameCount so drop
+        // ratios use the total observed timeline. A source is usable only when
+        // at least one of those frames was actually accepted for writing.
+        capturedFrameCount > droppedFrameCount
     }
 }
 

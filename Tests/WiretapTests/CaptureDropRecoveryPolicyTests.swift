@@ -3,6 +3,17 @@ import XCTest
 @testable import Wiretap
 
 final class CaptureDropRecoveryPolicyTests: XCTestCase {
+    func testDroppedOnlyFramesDoNotClaimUsableCapture() {
+        XCTAssertFalse(CaptureStopResult(
+            capturedFrameCount: 1_024,
+            droppedFrameCount: 1_024
+        ).didCaptureFrames)
+        XCTAssertTrue(CaptureStopResult(
+            capturedFrameCount: 1_025,
+            droppedFrameCount: 1_024
+        ).didCaptureFrames)
+    }
+
     func testRecoversObservedShortMicrophonePoolExhaustion() {
         let result = CaptureStopResult(
             capturedFrameCount: 502_272,

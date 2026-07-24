@@ -305,6 +305,39 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRuntimeSystemAudioFailureStopsAndRetainsActiveSources() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap()
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+        try await waitForRecordingStart(store)
+        let originalCreatedAt = try XCTUnwrap(store.recordings.first?.createdAt)
+
+        systemAudioTap.triggerRuntimeFailure(SystemAudioTapError.displayUnavailable)
+
+        XCTAssertFalse(store.isRecording)
+        XCTAssertEqual(store.systemAudioState, .unavailable)
+        let interrupted = try XCTUnwrap(store.recordings.first)
+        XCTAssertEqual(interrupted.status, .interrupted)
+        XCTAssertEqual(interrupted.createdAt, originalCreatedAt)
+        XCTAssertNotNil(interrupted.recoveryFolderURL)
+        XCTAssertTrue(
+            try XCTUnwrap(store.notice?.message)
+                .localizedStandardContains("System audio capture stopped")
+        )
+        XCTAssertGreaterThanOrEqual(systemAudioTap.stopCallCount, 1)
+        XCTAssertGreaterThanOrEqual(microphoneRecorder.stopCallCount, 1)
+    }
+
+    @MainActor
     func testStartRecordingDoesNotFallbackToMicrophoneOnlyWhenSystemAudioPermissionFails() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(
@@ -1381,9 +1414,20 @@ private final class FakeSystemAudioTap: SystemAudioTapping, @unchecked Sendable 
     let startDelay: Duration?
     let stopResult: CaptureStopResult
     let startWriter: ((URL) throws -> Void)?
+    var runtimeFailureHandler: SystemAudioFailureHandler?
 
     func prewarm() {
         prewarmCallCount += 1
+    }
+
+    func setRuntimeFailureHandler(_ handler: @escaping SystemAudioFailureHandler) {
+        runtimeFailureHandler = handler
+    }
+
+    @MainActor
+    func triggerRuntimeFailure(_ error: Error) {
+        isRunning = false
+        runtimeFailureHandler?(error)
     }
 
     init(

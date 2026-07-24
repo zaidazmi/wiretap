@@ -255,6 +255,9 @@ final class WiretapStore {
         self.microphoneRouteInspector = microphoneRouteInspector
         self.minimumFreeDiskSpaceBytes = minimumFreeDiskSpaceBytes
         self.captureStallThreshold = captureStallThreshold
+        self.systemAudioTap.setRuntimeFailureHandler { [weak self] error in
+            self?.handleSystemAudioCaptureFailure(error)
+        }
     }
 
     var filteredRecordings: [Recording] {
@@ -654,6 +657,16 @@ final class WiretapStore {
         }
     }
 
+    private func handleSystemAudioCaptureFailure(_ error: Error) {
+        guard isRecording, activeCaptureSources.contains(.systemAudio) else { return }
+
+        logger.error(
+            "System audio capture failed during recording error=\(error.localizedDescription, privacy: .public); retaining active sources"
+        )
+        preserveInterruptedRecording(reason: .systemAudioCaptureFailed)
+        systemAudioState = .unavailable
+    }
+
     func tick(now: Date = Date()) {
         if isRecording, let recordingStartedAt {
             elapsedSeconds = now.timeIntervalSince(recordingStartedAt)
@@ -1002,11 +1015,10 @@ final class WiretapStore {
               let systemAudioURL = activeSystemAudioURL
         else { return }
 
-        let stoppedAt = Date()
-        let title = reason.recordingTitle(createdAt: stoppedAt)
         let captureSources = activeCaptureSources
         let sourceStartDates = activeSourceStartDates
-        let createdAt = recordings.first(where: { $0.id == id })?.createdAt ?? stoppedAt
+        let createdAt = recordings.first(where: { $0.id == id })?.createdAt ?? Date()
+        let title = reason.recordingTitle(createdAt: createdAt)
 
         if case .mixSources = finalization {
             upsertRecording(
@@ -1320,10 +1332,11 @@ final class WiretapStore {
     ) {
         let recoveryFolderURL = try? repository.retainTemporaryFiles(cleanupURLs, for: id)
         let didRetainSources = recoveryFolderURL != nil
+        let createdAt = recordings.first(where: { $0.id == id })?.createdAt ?? Date()
         let interruptedRecording = Recording(
             id: id,
             title: title,
-            createdAt: Date(),
+            createdAt: createdAt,
             duration: max(durationFallback, 1),
             fileURL: nil,
             recoveryFolderURL: recoveryFolderURL,

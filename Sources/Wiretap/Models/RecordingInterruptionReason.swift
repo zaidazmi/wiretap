@@ -5,6 +5,7 @@ enum RecordingInterruptionReason: String, CaseIterable, Sendable {
     case systemSleep
     case sessionInactive
     case audioDeviceChanged
+    case systemAudioCaptureFailed
     case unexpectedShutdown
 
     var noticeMessage: String {
@@ -17,6 +18,8 @@ enum RecordingInterruptionReason: String, CaseIterable, Sendable {
             "The active macOS session changed, so Wiretap stopped capture and saved the partial recording for review."
         case .audioDeviceChanged:
             "Wiretap could not safely continue after the default audio device changed, so it saved the partial recording for review."
+        case .systemAudioCaptureFailed:
+            "System audio capture stopped unexpectedly, so Wiretap stopped the session before more audio could be missed."
         case .unexpectedShutdown:
             "Wiretap found a recording that did not shut down cleanly. Source files were retained for recovery."
         }
@@ -32,6 +35,8 @@ enum RecordingInterruptionReason: String, CaseIterable, Sendable {
             "Interrupted - source files retained after session change"
         case .audioDeviceChanged:
             "Interrupted - source files retained after audio device change"
+        case .systemAudioCaptureFailed:
+            "Interrupted - source files retained after system audio capture failed"
         case .unexpectedShutdown:
             "Interrupted - source files retained after unexpected shutdown"
         }

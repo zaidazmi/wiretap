@@ -4,13 +4,20 @@ import CoreMedia
 import Foundation
 @preconcurrency import ScreenCaptureKit
 
+typealias SystemAudioFailureHandler = @MainActor @Sendable (Error) -> Void
+
 protocol SystemAudioTapping: AnyObject, Sendable {
     var isRunning: Bool { get }
     var capturedFrameCount: Int64 { get }
 
     func prewarm()
+    func setRuntimeFailureHandler(_ handler: @escaping SystemAudioFailureHandler)
     func start(writingTo outputURL: URL) async throws
     @discardableResult func stop() -> CaptureStopResult
+}
+
+extension SystemAudioTapping {
+    func setRuntimeFailureHandler(_: @escaping SystemAudioFailureHandler) {}
 }
 
 /// Records the system-audio mix through ScreenCaptureKit.
@@ -39,6 +46,8 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     private var lastContentError: Error?
     private var contentRefreshInProgress = false
     private var permissionRequestState = ScreenCapturePermissionRequestState()
+    private var runtimeFailureHandler: SystemAudioFailureHandler?
+    private var unexpectedStopError: Error?
     private let logger = WiretapLog.capture
 
     var isRunning: Bool {
@@ -59,6 +68,12 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
         guard shouldRequest else { return }
 
         scheduleShareableDisplayRefresh()
+    }
+
+    func setRuntimeFailureHandler(_ handler: @escaping SystemAudioFailureHandler) {
+        stateLock.withLock {
+            runtimeFailureHandler = handler
+        }
     }
 
     func start(writingTo outputURL: URL) async throws {
@@ -102,6 +117,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
 
             stateLock.withLock {
                 self.stream = stream
+                unexpectedStopError = nil
             }
             outputQueue.sync {
                 self.activeStreamID = ObjectIdentifier(stream)
@@ -112,10 +128,16 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
 
             try await stream.startCapture()
             try Task.checkCancellation()
-            let isCurrentStream = stateLock.withLock {
-                self.stream === stream
+            let streamState = stateLock.withLock {
+                (
+                    isCurrent: self.stream === stream,
+                    stopError: unexpectedStopError
+                )
             }
-            guard isCurrentStream else { throw CancellationError() }
+            if let stopError = streamState.stopError {
+                throw stopError
+            }
+            guard streamState.isCurrent else { throw CancellationError() }
 
             logger.info(
                 "System audio capture started format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) output=\(outputURL.lastPathComponent, privacy: .public)"
@@ -128,7 +150,8 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             }
             outputQueue.sync {
                 if let attemptedStream,
-                   self.activeStreamID != ObjectIdentifier(attemptedStream) {
+                   let activeStreamID = self.activeStreamID,
+                   activeStreamID != ObjectIdentifier(attemptedStream) {
                     return
                 }
                 self.activeStreamID = nil
@@ -330,9 +353,27 @@ struct ScreenCapturePermissionRequestState: Equatable {
 extension SystemAudioTap: SCStreamDelegate, SCStreamOutput {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         recordPermissionFailureIfNeeded(error)
+        let handler = stateLock.withLock { () -> SystemAudioFailureHandler? in
+            guard self.stream === stream else { return nil }
+
+            self.stream = nil
+            unexpectedStopError = error
+            return runtimeFailureHandler
+        }
+        guard let handler else { return }
+
+        outputQueue.sync {
+            if activeStreamID == ObjectIdentifier(stream) {
+                activeStreamID = nil
+            }
+        }
         logger.error(
             "System audio stream stopped unexpectedly: \(error.localizedDescription, privacy: .public)"
         )
+        let mappedError = SystemAudioTapError.map(error)
+        Task { @MainActor in
+            handler(mappedError)
+        }
     }
 
     func stream(

@@ -66,6 +66,10 @@ final class RecordingModelTests: XCTestCase {
             RecordingInterruptionReason.audioDeviceChanged.recoverySummary,
             "Interrupted - source files retained after audio device change"
         )
+        XCTAssertTrue(
+            RecordingInterruptionReason.systemAudioCaptureFailed.noticeMessage
+                .localizedStandardContains("stopped unexpectedly")
+        )
         XCTAssertEqual(
             RecordingInterruptionReason.unexpectedShutdown.recoverySummary,
             "Interrupted - source files retained after unexpected shutdown"

@@ -139,8 +139,15 @@ struct RecordingLibraryRepository {
                     : RecordingInterruptionReason.unexpectedShutdown.recoverySummary
 
             case .interrupted:
-                if refreshed.recoveryFolderURL == nil,
-                   let recoveryFolderURL = existingRecoveryFolderIfPresent(for: recording.id) {
+                // A prior stop or recovery attempt may have persisted the
+                // interrupted row even though one or more source moves failed
+                // or the process exited between moves. Retry every outstanding
+                // source before accepting the existing recovery folder.
+                let recoveryFolderURL = (try? retainTemporaryFiles(
+                    temporarySourceURLs(for: recording.id),
+                    for: recording.id
+                )) ?? existingRecoveryFolderIfPresent(for: recording.id)
+                if let recoveryFolderURL {
                     refreshed.recoveryFolderURL = recoveryFolderURL
                     refreshed.sourceSummary = RecordingInterruptionReason.unexpectedShutdown.recoverySummary
                 }

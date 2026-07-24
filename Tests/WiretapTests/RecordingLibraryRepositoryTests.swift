@@ -523,6 +523,42 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         )
     }
 
+    func testRefreshedFileStatusesRetriesUnmovedSourcesForInterruptedRow() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+        let systemURL = try repository.temporarySourceURL(for: id, source: "system")
+        try Data("mic".utf8).write(to: microphoneURL)
+        try Data("system".utf8).write(to: systemURL)
+        let interruptedRecording = Recording(
+            id: id,
+            title: "Interrupted",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 4,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "Interrupted - recording could not be recovered",
+            status: .interrupted
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [interruptedRecording])
+
+        let recoveryURL = try XCTUnwrap(refreshed.first?.recoveryFolderURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: microphoneURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: systemURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryURL.appendingPathComponent(microphoneURL.lastPathComponent).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryURL.appendingPathComponent(systemURL.lastPathComponent).path
+        ))
+        XCTAssertEqual(
+            refreshed.first?.sourceSummary,
+            RecordingInterruptionReason.unexpectedShutdown.recoverySummary
+        )
+    }
+
     func testRetainTemporaryFilesMovesSourcesAndDeleteRemovesRecoveryFolder() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()

@@ -31,7 +31,11 @@ extension SystemAudioTapping {
 final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     private static let sampleRate = 48_000.0
     private static let channelCount: AVAudioChannelCount = 2
-    private static let shareableContentTimeout: TimeInterval = 1.5
+    // Resolving shareable content can take several seconds immediately after
+    // login, permission approval, or a display topology change. Prewarming
+    // normally hides this latency, while this bound prevents a stuck framework
+    // request from holding recording startup indefinitely.
+    private static let shareableContentTimeout: TimeInterval = 5
 
     private let outputQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.system-audio-capture", qos: .userInitiated)
     private let outputQueueKey = DispatchSpecificKey<Bool>()
@@ -290,12 +294,17 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             return display
         }
 
-        if let lastContentError = stateLock.withLock({ lastContentError }),
-           !SystemAudioTapError.isPermissionDenied(lastContentError) {
+        if let lastContentError = stateLock.withLock({ lastContentError }) {
+            if SystemAudioTapError.isPermissionDenied(lastContentError) {
+                throw SystemAudioTapError.permissionDenied
+            }
             throw lastContentError
         }
 
-        throw SystemAudioTapError.permissionDenied
+        // A refresh that has not completed by the deadline is not evidence
+        // that the user denied capture permission. Report the temporary
+        // display-resolution failure so retry guidance remains accurate.
+        throw SystemAudioTapError.displayUnavailable
     }
 
     private func scheduleShareableDisplayRefresh() {

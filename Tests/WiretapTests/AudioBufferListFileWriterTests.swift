@@ -321,6 +321,46 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(duration, 0.5, accuracy: 0.05)
     }
 
+    func testExplicitFileFormatPreserves48kOutputAcrossBluetoothToBuiltInTransition() throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("bluetooth-to-built-in.caf")
+        let bluetoothFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let builtInFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let fileFormat = try XCTUnwrap(AVAudioFormat(
+            standardFormatWithSampleRate: 48_000,
+            channels: 1
+        ))
+        let bluetoothBuffer = try makeToneBuffer(format: bluetoothFormat, duration: 0.25)
+        let builtInBuffer = try makeToneBuffer(format: builtInFormat, duration: 0.25)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: bluetoothFormat,
+            fileFormat: fileFormat,
+            channelMapping: .primaryInput
+        )
+
+        writer?.write(buffer: bluetoothBuffer)
+        writer?.updateInputFormat(builtInFormat)
+        writer?.write(buffer: builtInBuffer)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        let file = try AVAudioFile(forReading: outputURL)
+        XCTAssertEqual(file.processingFormat.sampleRate, 48_000)
+        XCTAssertEqual(file.processingFormat.channelCount, 1)
+        XCTAssertEqual(file.length, 24_000, accuracy: 32)
+    }
+
     func testRepeatedFormatTransitionsDrainEachConverterInTimelineOrder() throws {
         let outputURL = temporaryDirectory.appendingPathComponent("repeated-format-changes.caf")
         let fileFormat = try XCTUnwrap(AVAudioFormat(

@@ -36,6 +36,7 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
     init(
         outputURL: URL,
         inputFormat: AVAudioFormat,
+        fileFormat: AVAudioFormat? = nil,
         channelMapping: CaptureChannelMapping = .automatic,
         // VoiceProcessingIO normally delivers 512-frame buffers. Keep more than
         // one second of reusable headroom so a short disk or scheduler stall
@@ -46,15 +47,16 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
             try audioFile.write(from: buffer)
         }
     ) throws {
-        let outputSettings = Self.linearPCMSettings(for: inputFormat)
+        let fileFormat = fileFormat ?? inputFormat
+        let outputSettings = Self.linearPCMSettings(for: fileFormat)
 
         self.currentInputFormat = inputFormat
         self.state = WriteState(
             audioFile: try AVAudioFile(
                 forWriting: outputURL,
                 settings: outputSettings,
-                commonFormat: inputFormat.commonFormat,
-                interleaved: inputFormat.isInterleaved
+                commonFormat: fileFormat.commonFormat,
+                interleaved: fileFormat.isInterleaved
             ),
             channelMapping: channelMapping,
             writeBuffer: writeBuffer

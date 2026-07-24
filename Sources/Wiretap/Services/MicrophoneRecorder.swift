@@ -122,9 +122,16 @@ final class MicrophoneRecorder: MicrophoneRecording {
         logger.info(
             "Preparing microphone capture mode=physical-device device=\(device.id, privacy: .public) uid=\(deviceUID, privacy: .private(mask: .hash)) outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public) output=\(url.lastPathComponent, privacy: .public)"
         )
+        guard let fileFormat = AVAudioFormat(
+            standardFormatWithSampleRate: 48_000,
+            channels: 1
+        ) else {
+            throw AudioRecordingError.unsupportedFormat
+        }
         let writer = try AudioBufferListFileWriter(
             outputURL: url,
             inputFormat: inputFormat,
+            fileFormat: fileFormat,
             channelMapping: .primaryInput
         )
         self.device = device

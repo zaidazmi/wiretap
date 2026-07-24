@@ -68,6 +68,9 @@ final class SystemAudioTapErrorTests: XCTestCase {
             domain: SCStreamErrorDomain,
             code: SCStreamError.Code.attemptToStopStreamState.rawValue
         )))
+        XCTAssertFalse(SystemAudioTapError.isPermissionDenied(
+            SystemAudioTapError.displayUnavailable
+        ))
     }
 
     func testCaptureSourceStateLabelsAreUserVisible() {

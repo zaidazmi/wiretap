@@ -27,12 +27,16 @@ struct RecordingControlView: View {
                 .frame(maxWidth: style == .menuBar ? .infinity : nil)
         }
         .tint(store.isRecording ? .red : .accentColor)
-        .disabled(!store.isRecording && !store.canRecord)
+        .disabled(!store.isRecording && !store.isStartingRecording && !store.canRecord)
         .help(buttonTitle)
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var buttonTitle: String {
+        if store.isStartingRecording {
+            return "Cancel Start"
+        }
+
         if store.isProcessingRecording {
             return "Saving…"
         }
@@ -45,6 +49,7 @@ struct RecordingControlView: View {
     }
 
     private var buttonSystemImage: String {
+        if store.isStartingRecording { return "xmark.circle" }
         if store.isProcessingRecording { return "hourglass" }
         return store.isRecording ? "stop.fill" : "record.circle"
     }

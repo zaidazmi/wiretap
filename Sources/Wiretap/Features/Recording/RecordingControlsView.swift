@@ -8,7 +8,10 @@ struct RecordingControlsView: View {
             Button {
                 store.startRecording()
             } label: {
-                Label("Record", systemImage: "record.circle.fill")
+                Label(
+                    store.isStartingRecording ? "Starting…" : "Record",
+                    systemImage: store.isStartingRecording ? "hourglass" : "record.circle.fill"
+                )
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -25,7 +28,7 @@ struct RecordingControlsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .disabled(!store.isRecording)
+            .disabled(!store.isRecording && !store.isStartingRecording)
             .accessibilityIdentifier(WiretapAccessibility.MenuBar.stopButton)
         }
     }

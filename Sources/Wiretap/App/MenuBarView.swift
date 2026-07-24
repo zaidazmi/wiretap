@@ -77,7 +77,7 @@ private struct MenuHeader: View {
         HStack(spacing: 12) {
             RecordingStatusBadge(
                 isRecording: store.isRecording,
-                isProcessing: store.isProcessingRecording
+                isProcessing: store.isStartingRecording || store.isProcessingRecording
             )
 
             VStack(alignment: .leading, spacing: 3) {
@@ -90,9 +90,23 @@ private struct MenuHeader: View {
 
             Spacer()
 
-            Text(store.isRecording ? "Live" : store.isProcessingRecording ? "Saving" : "Idle")
+            Text(
+                store.isRecording
+                    ? "Live"
+                    : store.isStartingRecording
+                        ? "Starting"
+                        : store.isProcessingRecording
+                            ? "Saving"
+                            : "Idle"
+            )
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(store.isRecording ? .red : store.isProcessingRecording ? Color.accentColor : .secondary)
+                .foregroundStyle(
+                    store.isRecording
+                        ? .red
+                        : store.isStartingRecording || store.isProcessingRecording
+                            ? Color.accentColor
+                            : .secondary
+                )
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(
@@ -100,7 +114,7 @@ private struct MenuHeader: View {
                         .fill(
                             store.isRecording
                                 ? Color.red.opacity(0.12)
-                                : store.isProcessingRecording
+                                : store.isStartingRecording || store.isProcessingRecording
                                     ? Color.accentColor.opacity(0.12)
                                     : Color.secondary.opacity(0.12)
                         )

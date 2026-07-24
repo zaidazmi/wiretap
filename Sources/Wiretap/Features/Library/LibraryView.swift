@@ -113,7 +113,7 @@ private struct LibraryStatusStrip: View {
     var body: some View {
         if store.isRecording {
             activeBody
-        } else if store.isProcessingRecording {
+        } else if store.isStartingRecording || store.isProcessingRecording {
             processingBody
         } else {
             idleBody

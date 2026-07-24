@@ -81,7 +81,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testRecordAgainStartsSystemAndMicrophoneRecording() throws {
+    func testRecordAgainStartsSystemAndMicrophoneRecording() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let interruptedID = UUID()
         let recoveryFolderURL = try makeRecoveryFolder(
@@ -110,6 +110,7 @@ final class WiretapStoreTests: XCTestCase {
         XCTAssertTrue(store.canRetryRecording(interruptedRecording))
 
         store.recordAgain(interruptedRecording)
+        try await waitForRecordingStart(store)
 
         XCTAssertTrue(store.isRecording)
         XCTAssertEqual(systemAudioTap.startCallCount, 1)
@@ -117,7 +118,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testRecordAgainBlocksWhenMicrophoneDenied() throws {
+    func testRecordAgainBlocksWhenMicrophoneDenied() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let interruptedID = UUID()
         let recoveryFolderURL = try makeRecoveryFolder(
@@ -147,6 +148,7 @@ final class WiretapStoreTests: XCTestCase {
         XCTAssertFalse(store.canRetryRecording(interruptedRecording))
 
         store.recordAgain(interruptedRecording)
+        try await waitForRecordingStart(store)
 
         XCTAssertFalse(store.isRecording)
         XCTAssertEqual(systemAudioTap.startCallCount, 0)
@@ -242,9 +244,42 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStartRecordingDoesNotFallbackToMicrophoneOnlyWhenSystemAudioPermissionFails() throws {
+    func testStartRecordingWaitsForConfirmedSystemAudioStartup() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
-        let systemAudioTap = FakeSystemAudioTap(startError: SystemAudioTapError.permissionDenied)
+        let systemAudioTap = FakeSystemAudioTap(startDelay: .milliseconds(100))
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        let requestedAt = Date()
+        store.startRecording()
+
+        XCTAssertTrue(store.isStartingRecording)
+        XCTAssertFalse(store.isRecording)
+        XCTAssertEqual(store.recordingTitle, "Starting recording")
+        XCTAssertEqual(microphoneRecorder.startCallCount, 0)
+
+        try await waitForRecordingStart(store)
+
+        XCTAssertFalse(store.isStartingRecording)
+        XCTAssertTrue(store.isRecording)
+        XCTAssertGreaterThanOrEqual(
+            try XCTUnwrap(store.recordingStartedAt).timeIntervalSince(requestedAt),
+            0.08
+        )
+        XCTAssertEqual(systemAudioTap.startCallCount, 1)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 1)
+    }
+
+    @MainActor
+    func testToggleRecordingCancelsPendingSystemAudioStartup() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap(startDelay: .seconds(1))
         let microphoneRecorder = FakeMicrophoneRecorder()
         let store = WiretapStore(
             repository: repository,
@@ -255,6 +290,38 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        XCTAssertTrue(store.isStartingRecording)
+
+        store.toggleRecording()
+        try await waitForRecordingStart(store)
+
+        XCTAssertFalse(store.isStartingRecording)
+        XCTAssertFalse(store.isRecording)
+        XCTAssertTrue(store.recordings.isEmpty)
+        XCTAssertTrue(try repository.loadRecordings().isEmpty)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 0)
+        XCTAssertGreaterThanOrEqual(systemAudioTap.stopCallCount, 1)
+        XCTAssertNil(store.notice)
+    }
+
+    @MainActor
+    func testStartRecordingDoesNotFallbackToMicrophoneOnlyWhenSystemAudioPermissionFails() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap(
+            startError: SystemAudioTapError.permissionDenied,
+            startDelay: .milliseconds(50)
+        )
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+        try await waitForRecordingStart(store)
 
         XCTAssertFalse(store.isRecording)
         XCTAssertTrue(store.recordings.isEmpty)
@@ -267,7 +334,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStartRecordingReportsLowDiskSpaceWithoutChangingCaptureStates() throws {
+    func testStartRecordingReportsLowDiskSpaceWithoutChangingCaptureStates() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap()
         let microphoneRecorder = FakeMicrophoneRecorder()
@@ -282,6 +349,7 @@ final class WiretapStoreTests: XCTestCase {
         store.systemAudioState = .ready
 
         store.startRecording()
+        try await waitForRecordingStart(store)
 
         XCTAssertFalse(store.isRecording)
         XCTAssertTrue(store.recordings.isEmpty)
@@ -295,7 +363,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStartRecordingBlocksLoopbackMicrophoneForSystemAndMicrophoneMode() throws {
+    func testStartRecordingBlocksLoopbackMicrophoneForSystemAndMicrophoneMode() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap()
         let microphoneRecorder = FakeMicrophoneRecorder()
@@ -311,6 +379,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
 
         XCTAssertFalse(store.isRecording)
         XCTAssertTrue(store.recordings.isEmpty)
@@ -346,6 +415,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
 
         let activeRecording = try XCTUnwrap(store.recordings.first)
         let finalURL = try XCTUnwrap(activeRecording.fileURL)
@@ -400,7 +470,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStopRecordingRetainsSourcesWhenCaptureWritesFail() throws {
+    func testStopRecordingRetainsSourcesWhenCaptureWritesFail() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap()
         let microphoneRecorder = FakeMicrophoneRecorder(
@@ -418,6 +488,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
         store.stopRecording()
 
         let recording = try XCTUnwrap(store.recordings.first)
@@ -433,7 +504,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStopRecordingSurfacesDroppedCaptureFramesAsFinalizationFailure() throws {
+    func testStopRecordingSurfacesDroppedCaptureFramesAsFinalizationFailure() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let droppedFrameError = AudioBufferListFileWriterError.bufferPoolExhausted(frameCount: 12_000)
         let systemAudioTap = FakeSystemAudioTap()
@@ -454,6 +525,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
         store.stopRecording()
 
         let recording = try XCTUnwrap(store.recordings.first)
@@ -469,7 +541,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStopRecordingRetainsSourcesWhenCaptureReportsDroppedFramesWithoutWriteError() throws {
+    func testStopRecordingRetainsSourcesWhenCaptureReportsDroppedFramesWithoutWriteError() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(
             stopResult: CaptureStopResult(
@@ -492,6 +564,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
         store.stopRecording()
 
         let recording = try XCTUnwrap(store.recordings.first)
@@ -526,6 +599,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
 
         let activeRecording = try XCTUnwrap(store.recordings.first)
         let finalURL = try XCTUnwrap(activeRecording.fileURL)
@@ -581,6 +655,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
 
         let activeRecording = try XCTUnwrap(store.recordings.first)
         let finalURL = try XCTUnwrap(activeRecording.fileURL)
@@ -613,7 +688,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStopRecordingRetainsSourcesWhenNoExpectedCaptureHasFrames() throws {
+    func testStopRecordingRetainsSourcesWhenNoExpectedCaptureHasFrames() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(stopResult: CaptureStopResult(capturedFrameCount: 0))
         let microphoneRecorder = FakeMicrophoneRecorder(
@@ -628,6 +703,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
         store.stopRecording()
 
         let recording = try XCTUnwrap(store.recordings.first)
@@ -667,6 +743,7 @@ final class WiretapStoreTests: XCTestCase {
         )
 
         store.startRecording()
+        try await waitForRecordingStart(store)
         let startedAt = try XCTUnwrap(store.recordingStartedAt)
         systemAudioTap.capturedFrameCount = 48_000
         microphoneRecorder.capturedFrameCount = 48_000
@@ -1139,6 +1216,13 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    private func waitForRecordingStart(_ store: WiretapStore) async throws {
+        try await waitUntil("recording start completes") {
+            !store.isStartingRecording
+        }
+    }
+
+    @MainActor
     private func waitUntil(
         _ description: String,
         timeout: TimeInterval = 2,
@@ -1287,13 +1371,14 @@ private final class FakePlaybackController: AudioPlaybackControlling {
     }
 }
 
-private final class FakeSystemAudioTap: SystemAudioTapping {
+private final class FakeSystemAudioTap: SystemAudioTapping, @unchecked Sendable {
     var isRunning = false
     var capturedFrameCount: Int64 = 0
     var startCallCount = 0
     var stopCallCount = 0
     var prewarmCallCount = 0
     let startError: Error?
+    let startDelay: Duration?
     let stopResult: CaptureStopResult
     let startWriter: ((URL) throws -> Void)?
 
@@ -1303,16 +1388,22 @@ private final class FakeSystemAudioTap: SystemAudioTapping {
 
     init(
         startError: Error? = nil,
+        startDelay: Duration? = nil,
         stopResult: CaptureStopResult = CaptureStopResult(capturedFrameCount: 48_000),
         startWriter: ((URL) throws -> Void)? = nil
     ) {
         self.startError = startError
+        self.startDelay = startDelay
         self.stopResult = stopResult
         self.startWriter = startWriter
     }
 
-    func start(writingTo outputURL: URL) throws {
+    func start(writingTo outputURL: URL) async throws {
         startCallCount += 1
+
+        if let startDelay {
+            try await Task.sleep(for: startDelay)
+        }
 
         if let startError {
             throw startError

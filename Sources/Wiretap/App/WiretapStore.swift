@@ -187,6 +187,7 @@ final class WiretapStore {
     var recordings: [Recording]
     var selectedRecordingID: Recording.ID?
     var searchText = ""
+    var isStartingRecording = false
     var isRecording = false
     var recordingStartedAt: Date?
     var elapsedSeconds: TimeInterval = 0
@@ -224,6 +225,7 @@ final class WiretapStore {
     @ObservationIgnored private var activeCaptureFrameCounts: [RecordingSource: Int64] = [:]
     @ObservationIgnored private var activeCaptureProgressDates: [RecordingSource: Date] = [:]
     @ObservationIgnored private var activeCaptureStalledSources = Set<RecordingSource>()
+    @ObservationIgnored private var recordingStartTask: Task<Void, Never>?
     @ObservationIgnored private let captureStallThreshold: TimeInterval
     private(set) var pendingPlaybackProgress: [Recording.ID: Double] = [:]
 
@@ -293,12 +295,17 @@ final class WiretapStore {
     }
 
     var recordingTitle: String {
+        if isStartingRecording { return "Starting recording" }
         if isRecording { return "Recording in progress" }
         if isProcessingRecording { return "Saving recording" }
         return "Ready to record"
     }
 
     var recordingSubtitle: String {
+        if isStartingRecording {
+            return "Waiting for system audio capture to become active"
+        }
+
         if isRecording {
             return "\(Recording.sourceSummary(for: Array(activeCaptureSources))) capture active"
         }
@@ -358,10 +365,11 @@ final class WiretapStore {
     }
 
     var canRecord: Bool {
-        permissionState != .denied && !isProcessingRecording
+        permissionState != .denied && !isProcessingRecording && !isStartingRecording
     }
 
     var statusTimeText: String {
+        if isStartingRecording { return "Starting…" }
         if isRecording { return elapsedText }
         return recordings.first(where: { $0.status == .processing })?.durationText ?? "00:00"
     }
@@ -403,6 +411,10 @@ final class WiretapStore {
 
     func toggleRecording() {
         guard !isProcessingRecording else { return }
+        if isStartingRecording {
+            cancelRecordingStart()
+            return
+        }
         isRecording ? stopRecording() : startRecording()
     }
 
@@ -415,6 +427,28 @@ final class WiretapStore {
     }
 
     func startRecording() {
+        guard !isStartingRecording else { return }
+        guard !isProcessingRecording else {
+            notice = WiretapNotice(
+                title: "Recording Is Still Saving",
+                message: "Wait for the current recording to finish processing before starting another one."
+            )
+            return
+        }
+
+        isStartingRecording = true
+        recordingStartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performStartRecording()
+        }
+    }
+
+    private func performStartRecording() async {
+        defer {
+            isStartingRecording = false
+            recordingStartTask = nil
+        }
+
         guard !isProcessingRecording else {
             notice = WiretapNotice(
                 title: "Recording Is Still Saving",
@@ -425,7 +459,7 @@ final class WiretapStore {
 
         permissionState = permissionManager.currentState()
 
-        guard canRecord else {
+        guard permissionState != .denied else {
             notice = WiretapNotice(
                 title: "Permissions Denied",
                 message: permissionState.summary,
@@ -439,12 +473,13 @@ final class WiretapStore {
 
         do {
             try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
+            try Task.checkCancellation()
 
             let requestedCaptureSources: Set<RecordingSource> = [.systemAudio, .microphone]
             try validateMicrophoneRoute(for: requestedCaptureSources)
 
             let id = UUID()
-            let startedAt = Date()
+            let requestedAt = Date()
             let finalURL = try repository.recordingURL(for: id)
             let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
             let systemAudioURL = try repository.temporarySourceURL(for: id, source: "system")
@@ -457,8 +492,8 @@ final class WiretapStore {
             upsertRecording(
                 Recording(
                     id: id,
-                    title: "Recording \(startedAt.formatted(date: .abbreviated, time: .shortened))",
-                    createdAt: startedAt,
+                    title: "Recording \(requestedAt.formatted(date: .abbreviated, time: .shortened))",
+                    createdAt: requestedAt,
                     duration: 0,
                     fileURL: finalURL,
                     fileSizeBytes: 0,
@@ -473,7 +508,8 @@ final class WiretapStore {
 
             if requestedCaptureSources.contains(.systemAudio) {
                 do {
-                    try systemAudioTap.start(writingTo: systemAudioURL)
+                    try await systemAudioTap.start(writingTo: systemAudioURL)
+                    try Task.checkCancellation()
                     systemAudioState = .ready
                     captureSources.insert(.systemAudio)
                     activeSourceStartDates[.systemAudio] = Date()
@@ -495,9 +531,10 @@ final class WiretapStore {
             activeMicrophoneURL = microphoneURL
             activeSystemAudioURL = systemAudioURL
             activeCaptureSources = captureSources
-            resetCaptureHealthTracking(startedAt: startedAt, sources: captureSources)
+            let captureStartedAt = activeSourceStartDates.values.min() ?? Date()
+            resetCaptureHealthTracking(startedAt: captureStartedAt, sources: captureSources)
             isRecording = true
-            recordingStartedAt = startedAt
+            recordingStartedAt = captureStartedAt
             elapsedSeconds = 0
             if requestedCaptureSources.contains(.microphone) {
                 permissionState = .ready
@@ -505,8 +542,8 @@ final class WiretapStore {
             upsertRecording(
                 Recording(
                     id: id,
-                    title: "Recording \(startedAt.formatted(date: .abbreviated, time: .shortened))",
-                    createdAt: startedAt,
+                    title: "Recording \(captureStartedAt.formatted(date: .abbreviated, time: .shortened))",
+                    createdAt: captureStartedAt,
                     duration: 0,
                     fileURL: finalURL,
                     fileSizeBytes: 0,
@@ -519,6 +556,7 @@ final class WiretapStore {
             selectedRecordingID = id
             saveLibrary()
         } catch {
+            let wasCancelled = error is CancellationError || Task.isCancelled
             if let pendingRecordingID {
                 logger.error(
                     "Recording start failed id=\(pendingRecordingID.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
@@ -535,7 +573,9 @@ final class WiretapStore {
                 try? persistLibrary()
             }
             resetRecordingState()
-            if let failure = error as? RecordingStartFailure {
+            if wasCancelled {
+                logger.info("Recording start cancelled")
+            } else if let failure = error as? RecordingStartFailure {
                 notice = failure.notice
             } else if case RecordingLibraryError.insufficientDiskSpace = error {
                 notice = WiretapNotice(title: "Not Enough Disk Space", message: error.localizedDescription)
@@ -547,15 +587,36 @@ final class WiretapStore {
     }
 
     func stopRecording() {
+        if isStartingRecording {
+            cancelRecordingStart()
+            return
+        }
         finishActiveRecording(reason: .userInitiated, finalization: .mixSources)
     }
 
     func interruptRecording(reason: RecordingInterruptionReason) {
+        if isStartingRecording {
+            cancelRecordingStart()
+            return
+        }
         finishActiveRecording(reason: .interrupted(reason), finalization: .mixSources)
     }
 
     func preserveInterruptedRecording(reason: RecordingInterruptionReason) {
+        if isStartingRecording {
+            cancelRecordingStart()
+            return
+        }
         finishActiveRecording(reason: .interrupted(reason), finalization: .retainSources)
+    }
+
+    private func cancelRecordingStart() {
+        guard isStartingRecording else { return }
+
+        recordingStartTask?.cancel()
+        microphoneRecorder.stopRecording()
+        systemAudioTap.stop()
+        logger.info("Cancelling in-progress recording start")
     }
 
     func handleAudioDeviceChange(_ change: AudioDeviceChange) {

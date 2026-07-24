@@ -4,12 +4,12 @@ import CoreMedia
 import Foundation
 @preconcurrency import ScreenCaptureKit
 
-protocol SystemAudioTapping: AnyObject {
+protocol SystemAudioTapping: AnyObject, Sendable {
     var isRunning: Bool { get }
     var capturedFrameCount: Int64 { get }
 
     func prewarm()
-    func start(writingTo outputURL: URL) throws
+    func start(writingTo outputURL: URL) async throws
     @discardableResult func stop() -> CaptureStopResult
 }
 
@@ -61,11 +61,12 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
         scheduleShareableDisplayRefresh()
     }
 
-    func start(writingTo outputURL: URL) throws {
+    func start(writingTo outputURL: URL) async throws {
         guard !isRunning else { return }
 
+        var attemptedStream: SCStream?
         do {
-            let display = try resolveDisplay()
+            let display = try await resolveDisplay()
 
             let configuration = SCStreamConfiguration()
             configuration.width = 2
@@ -93,12 +94,15 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
 
             let writer = try AudioBufferListFileWriter(outputURL: outputURL, inputFormat: inputFormat)
             let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+            attemptedStream = stream
             // ScreenCaptureKit errors without a screen output even for
             // audio-only capture; its frames are dropped in the handler.
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
 
-            self.stream = stream
+            stateLock.withLock {
+                self.stream = stream
+            }
             outputQueue.sync {
                 self.activeStreamID = ObjectIdentifier(stream)
                 self.writer = writer
@@ -106,13 +110,12 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
                 self.didReceiveAudio = false
             }
 
-            stream.startCapture { [weak self] error in
-                guard let error else { return }
-                self?.recordPermissionFailureIfNeeded(error)
-                self?.logger.error(
-                    "System audio capture failed to start: \(error.localizedDescription, privacy: .public)"
-                )
+            try await stream.startCapture()
+            try Task.checkCancellation()
+            let isCurrentStream = stateLock.withLock {
+                self.stream === stream
             }
+            guard isCurrentStream else { throw CancellationError() }
 
             logger.info(
                 "System audio capture started format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) output=\(outputURL.lastPathComponent, privacy: .public)"
@@ -120,8 +123,14 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
         } catch {
             let mappedError = SystemAudioTapError.map(error)
             logger.error("System audio capture failed: \(mappedError.localizedDescription, privacy: .public)")
-            stopStream()
+            if let attemptedStream {
+                stopStream(attemptedStream)
+            }
             outputQueue.sync {
+                if let attemptedStream,
+                   self.activeStreamID != ObjectIdentifier(attemptedStream) {
+                    return
+                }
                 self.activeStreamID = nil
                 self.writer = nil
                 self.timelineOriginSeconds = nil
@@ -159,9 +168,17 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
         return result
     }
 
-    private func stopStream() {
+    private func stopStream(_ expectedStream: SCStream? = nil) {
+        let stream = stateLock.withLock { () -> SCStream? in
+            guard let stream = self.stream,
+                  expectedStream == nil || stream === expectedStream
+            else { return nil }
+
+            self.stream = nil
+            return stream
+        }
         guard let stream else { return }
-        self.stream = nil
+
         stream.stopCapture { [weak self] error in
             guard let error else { return }
             self?.logger.info(
@@ -173,7 +190,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     /// Returns the cached display, or waits briefly for a fresh shareable
     /// content fetch. A fetch blocked on the consent prompt times out and
     /// surfaces as a permission error so the user is pointed at Settings.
-    private func resolveDisplay() throws -> SCDisplay {
+    private func resolveDisplay() async throws -> SCDisplay {
         let initialState = stateLock.withLock {
             (
                 display: cachedDisplay,
@@ -222,7 +239,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
                 break
             }
 
-            Thread.sleep(forTimeInterval: 0.01)
+            try await Task.sleep(for: .milliseconds(10))
         }
 
         if let display = stateLock.withLock({ cachedDisplay }) {

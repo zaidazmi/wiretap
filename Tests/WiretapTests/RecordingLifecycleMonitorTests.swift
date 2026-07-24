@@ -24,11 +24,12 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testAudioDeviceChangesContinueActiveRecording() throws {
+    func testAudioDeviceChangesContinueActiveRecording() async throws {
         let audioDeviceMonitor = FakeAudioDeviceChangeMonitor()
         var context = makeLifecycleContext(audioDeviceMonitor: audioDeviceMonitor)
 
         context.store.startRecording()
+        try await waitForRecordingStart(context.store)
         audioDeviceMonitor.triggerChange(.defaultOutput)
         audioDeviceMonitor.triggerChange(.defaultInput)
 
@@ -48,12 +49,13 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedAudioDeviceHandoffPreservesActiveRecording() throws {
+    func testFailedAudioDeviceHandoffPreservesActiveRecording() async throws {
         let audioDeviceMonitor = FakeAudioDeviceChangeMonitor()
         let context = makeLifecycleContext(audioDeviceMonitor: audioDeviceMonitor)
         context.microphoneRecorder.deviceChangeError = SyntheticDeviceChangeError.failed
 
         context.store.startRecording()
+        try await waitForRecordingStart(context.store)
         audioDeviceMonitor.triggerChange(.defaultInput)
 
         try assertInterruptedRecording(
@@ -66,7 +68,7 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testLoopbackInputChangeKeepsPreviousMicrophoneActive() {
+    func testLoopbackInputChangeKeepsPreviousMicrophoneActive() async throws {
         let audioDeviceMonitor = FakeAudioDeviceChangeMonitor()
         let route = RouteInspectionBox()
         let context = makeLifecycleContext(
@@ -75,6 +77,7 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
         )
 
         context.store.startRecording()
+        try await waitForRecordingStart(context.store)
         route.value = MicrophoneRouteInspection(deviceName: "BlackHole 2ch")
         audioDeviceMonitor.triggerChange(.defaultInput)
 
@@ -85,11 +88,12 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testApplicationTerminationPreservesActiveRecording() throws {
+    func testApplicationTerminationPreservesActiveRecording() async throws {
         let notificationCenter = NotificationCenter()
         let context = makeLifecycleContext(notificationCenter: notificationCenter)
 
         context.store.startRecording()
+        try await waitForRecordingStart(context.store)
         notificationCenter.post(name: NSApplication.willTerminateNotification, object: nil)
 
         try assertInterruptedRecording(
@@ -102,11 +106,12 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testSystemSleepPreservesActiveRecordingSynchronously() throws {
+    func testSystemSleepPreservesActiveRecordingSynchronously() async throws {
         let workspaceNotificationCenter = NotificationCenter()
         let context = makeLifecycleContext(workspaceNotificationCenter: workspaceNotificationCenter)
 
         context.store.startRecording()
+        try await waitForRecordingStart(context.store)
         workspaceNotificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
 
         try assertInterruptedRecording(
@@ -119,11 +124,12 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
     }
 
     @MainActor
-    func testSessionInactivePreservesActiveRecordingSynchronously() throws {
+    func testSessionInactivePreservesActiveRecordingSynchronously() async throws {
         let workspaceNotificationCenter = NotificationCenter()
         let context = makeLifecycleContext(workspaceNotificationCenter: workspaceNotificationCenter)
 
         context.store.startRecording()
+        try await waitForRecordingStart(context.store)
         workspaceNotificationCenter.post(name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
 
         try assertInterruptedRecording(
@@ -133,6 +139,19 @@ final class RecordingLifecycleMonitorTests: XCTestCase {
         )
         XCTAssertEqual(context.microphoneRecorder.stopCallCount, 1)
         XCTAssertEqual(context.systemAudioTap.stopCallCount, 1)
+    }
+
+    @MainActor
+    private func waitForRecordingStart(_ store: WiretapStore) async throws {
+        let deadline = Date().addingTimeInterval(2)
+        while store.isStartingRecording {
+            if Date() >= deadline {
+                XCTFail("Timed out waiting for recording start")
+                return
+            }
+
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     @MainActor
@@ -211,14 +230,14 @@ private final class FakeAudioDeviceChangeMonitor: AudioDeviceChangeMonitoring {
     }
 }
 
-private final class MonitorFakeSystemAudioTap: SystemAudioTapping {
+private final class MonitorFakeSystemAudioTap: SystemAudioTapping, @unchecked Sendable {
     var isRunning = false
     var capturedFrameCount: Int64 = 48_000
     var stopCallCount = 0
 
     func prewarm() {}
 
-    func start(writingTo outputURL: URL) throws {
+    func start(writingTo outputURL: URL) async throws {
         try Data("system".utf8).write(to: outputURL)
         isRunning = true
     }

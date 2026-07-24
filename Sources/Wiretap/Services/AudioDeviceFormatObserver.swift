@@ -8,11 +8,17 @@ import Foundation
 /// mid-capture. The default-device monitor never fires for this because the
 /// device identity is unchanged, so capture sources observe the device's
 /// nominal sample rate and input-stream list directly.
-final class AudioDeviceFormatObserver {
+final class AudioDeviceFormatObserver: @unchecked Sendable {
     private struct Registration {
+        enum Kind {
+            case device
+            case stream
+        }
+
         var objectID: AudioObjectID
         var address: AudioObjectPropertyAddress
         let block: AudioObjectPropertyListenerBlock
+        var kind: Kind
     }
 
     private let queue: DispatchQueue
@@ -28,7 +34,10 @@ final class AudioDeviceFormatObserver {
         stop()
     }
 
-    func start(observing deviceID: AudioObjectID, onChange: @escaping () -> Void) {
+    func start(
+        observing deviceID: AudioObjectID,
+        onChange: @escaping @Sendable () -> Void
+    ) {
         stop()
         let generation = stateLock.withLock {
             self.generation &+= 1
@@ -40,7 +49,12 @@ final class AudioDeviceFormatObserver {
                 objectID: deviceID,
                 address: address,
                 generation: generation,
-                onChange: onChange
+                onChange: onChange,
+                kind: .device,
+                refreshStreamRegistrations: Self.shouldRefreshStreamRegistrations(
+                    for: address
+                ),
+                deviceID: deviceID
             )
         }
 
@@ -49,7 +63,10 @@ final class AudioDeviceFormatObserver {
                 objectID: streamID,
                 address: Self.streamVirtualFormatAddress,
                 generation: generation,
-                onChange: onChange
+                onChange: onChange,
+                kind: .stream,
+                refreshStreamRegistrations: false,
+                deviceID: deviceID
             )
         }
     }
@@ -103,15 +120,36 @@ final class AudioDeviceFormatObserver {
         )
     }
 
+    static func shouldRefreshStreamRegistrations(
+        for address: AudioObjectPropertyAddress
+    ) -> Bool {
+        address.mSelector == kAudioDevicePropertyStreams
+            && address.mScope == kAudioObjectPropertyScopeInput
+    }
+
     private func addRegistration(
         objectID: AudioObjectID,
         address: AudioObjectPropertyAddress,
         generation: UInt64,
-        onChange: @escaping () -> Void
+        onChange: @escaping @Sendable () -> Void,
+        kind: Registration.Kind,
+        refreshStreamRegistrations: Bool,
+        deviceID: AudioObjectID
     ) {
         var mutableAddress = address
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.performIfActive(generation: generation, onChange)
+            guard let self else { return }
+            performIfActive(generation: generation, onChange)
+
+            if refreshStreamRegistrations {
+                queue.async { [weak self] in
+                    self?.refreshInputStreamRegistrations(
+                        for: deviceID,
+                        generation: generation,
+                        onChange: onChange
+                    )
+                }
+            }
         }
         let status = AudioObjectAddPropertyListenerBlock(
             objectID,
@@ -123,7 +161,8 @@ final class AudioDeviceFormatObserver {
             let registration = Registration(
                 objectID: objectID,
                 address: mutableAddress,
-                block: block
+                block: block,
+                kind: kind
             )
             let shouldKeep = stateLock.withLock {
                 guard self.generation == generation else { return false }
@@ -136,9 +175,37 @@ final class AudioDeviceFormatObserver {
         }
     }
 
+    private func refreshInputStreamRegistrations(
+        for deviceID: AudioObjectID,
+        generation: UInt64,
+        onChange: @escaping @Sendable () -> Void
+    ) {
+        let previousStreamRegistrations = stateLock.withLock { () -> [Registration]? in
+            guard self.generation == generation else { return nil }
+
+            let streamRegistrations = registrations.filter { $0.kind == .stream }
+            registrations.removeAll { $0.kind == .stream }
+            return streamRegistrations
+        }
+        guard let previousStreamRegistrations else { return }
+
+        previousStreamRegistrations.forEach(remove)
+        for streamID in inputStreamIDs(for: deviceID) {
+            addRegistration(
+                objectID: streamID,
+                address: Self.streamVirtualFormatAddress,
+                generation: generation,
+                onChange: onChange,
+                kind: .stream,
+                refreshStreamRegistrations: false,
+                deviceID: deviceID
+            )
+        }
+    }
+
     private func performIfActive(
         generation: UInt64,
-        _ action: () -> Void
+        _ action: @Sendable () -> Void
     ) {
         stateLock.withLock {
             guard self.generation == generation else { return }

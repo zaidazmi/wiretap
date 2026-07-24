@@ -2,7 +2,11 @@ import AVFoundation
 import Foundation
 import os.lock
 
-final class AudioBufferListFileWriter {
+/// Thread-safe bridge from real-time capture callbacks to a serial file writer.
+///
+/// Input-format/timeline state is protected by `inputLock`; file conversion and
+/// writes run on `writeQueue`; counters and errors are protected by `WriteState`.
+final class AudioBufferListFileWriter: @unchecked Sendable {
     private let state: WriteState
     private let writeQueue: DispatchQueue
     private let writeQueueKey = DispatchSpecificKey<Bool>()

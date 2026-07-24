@@ -61,6 +61,24 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
             AudioDeviceFormatObserver.streamVirtualFormatAddress.mSelector,
             kAudioStreamPropertyVirtualFormat
         )
+        XCTAssertTrue(
+            AudioDeviceFormatObserver.shouldRefreshStreamRegistrations(
+                for: AudioObjectPropertyAddress(
+                    mSelector: kAudioDevicePropertyStreams,
+                    mScope: kAudioObjectPropertyScopeInput,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+            )
+        )
+        XCTAssertFalse(
+            AudioDeviceFormatObserver.shouldRefreshStreamRegistrations(
+                for: AudioObjectPropertyAddress(
+                    mSelector: kAudioDevicePropertyNominalSampleRate,
+                    mScope: kAudioObjectPropertyScopeGlobal,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+            )
+        )
     }
 
 }

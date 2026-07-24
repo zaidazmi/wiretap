@@ -132,11 +132,16 @@ final class MicrophoneRecorder: MicrophoneRecording {
         self.postProcessing = postProcessing
 
         let ioProcID = try createIOProc(on: device, writer: writer)
+        // Activating a Bluetooth microphone can itself trigger the A2DP → HFP
+        // format transition. Observe before AudioDeviceStart so that transition
+        // cannot occur in the registration gap, then confirm the settled format
+        // once startup returns.
+        observeFormatChanges(on: device, writer: writer)
         try startIOProc(ioProcID, on: device)
+        Self.refreshCaptureFormat(for: device, writer: writer)
 
         self.ioProcID = ioProcID
         startedAt = Date()
-        observeFormatChanges(on: device, writer: writer)
         logger.info("Microphone capture started mode=physical-device device=\(device.id, privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public)")
     }
 
@@ -175,11 +180,12 @@ final class MicrophoneRecorder: MicrophoneRecording {
             let newFormat = try Self.inputFormat(for: newDevice)
             writer.updateInputFormat(newFormat)
             let newIOProcID = try createIOProc(on: newDevice, writer: writer)
+            observeFormatChanges(on: newDevice, writer: writer)
             try startIOProc(newIOProcID, on: newDevice)
+            Self.refreshCaptureFormat(for: newDevice, writer: writer)
 
             device = newDevice
             ioProcID = newIOProcID
-            observeFormatChanges(on: newDevice, writer: writer)
             logger.info(
                 "Microphone device switched from=\(previousDevice.id, privacy: .public) to=\(newDevice.id, privacy: .public) format=\(WiretapLog.audioFormatSummary(newFormat), privacy: .public) handoffSeconds=\(Date().timeIntervalSince(handoffStartedAt), privacy: .public)"
             )
@@ -187,15 +193,17 @@ final class MicrophoneRecorder: MicrophoneRecording {
             logger.error(
                 "Microphone switch to device=\(newDevice.id, privacy: .public) failed error=\(error.localizedDescription, privacy: .public); attempting previous device=\(previousDevice.id, privacy: .public)"
             )
+            formatObserver.stop()
             do {
                 let previousFormat = try Self.inputFormat(for: previousDevice)
                 writer.updateInputFormat(previousFormat)
                 let restoredIOProcID = try createIOProc(on: previousDevice, writer: writer)
+                observeFormatChanges(on: previousDevice, writer: writer)
                 try startIOProc(restoredIOProcID, on: previousDevice)
+                Self.refreshCaptureFormat(for: previousDevice, writer: writer)
 
                 device = previousDevice
                 ioProcID = restoredIOProcID
-                observeFormatChanges(on: previousDevice, writer: writer)
                 logger.warning(
                     "Microphone capture remained on previous device=\(previousDevice.id, privacy: .public) after default-device switch failed"
                 )

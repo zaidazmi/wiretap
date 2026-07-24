@@ -5,18 +5,18 @@ import XCTest
 final class CaptureDropRecoveryPolicyTests: XCTestCase {
     func testDroppedOnlyFramesDoNotClaimUsableCapture() {
         XCTAssertFalse(CaptureStopResult(
-            capturedFrameCount: 1_024,
+            capturedFrameCount: 0,
             droppedFrameCount: 1_024
         ).didCaptureFrames)
         XCTAssertTrue(CaptureStopResult(
-            capturedFrameCount: 1_025,
+            capturedFrameCount: 1,
             droppedFrameCount: 1_024
         ).didCaptureFrames)
     }
 
     func testRecoversObservedShortMicrophonePoolExhaustion() {
         let result = CaptureStopResult(
-            capturedFrameCount: 502_272,
+            capturedFrameCount: 500_736,
             droppedFrameCount: 1_536,
             writeError: AudioBufferListFileWriterError.bufferPoolExhausted(frameCount: 512)
         )
@@ -36,7 +36,7 @@ final class CaptureDropRecoveryPolicyTests: XCTestCase {
 
     func testRecoversOneTransientSystemSampleBufferFailure() {
         let result = CaptureStopResult(
-            capturedFrameCount: 480_512,
+            capturedFrameCount: 480_000,
             droppedFrameCount: 512,
             writeError: AudioBufferListFileWriterError.sampleBufferUnavailable(frameCount: 512)
         )

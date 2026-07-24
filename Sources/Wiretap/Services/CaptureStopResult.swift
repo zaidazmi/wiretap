@@ -8,10 +8,7 @@ struct CaptureStopResult {
     var microphonePostProcessing: MicrophonePostProcessing = .none
 
     var didCaptureFrames: Bool {
-        // The writer includes rejected frames in capturedFrameCount so drop
-        // ratios use the total observed timeline. A source is usable only when
-        // at least one of those frames was actually accepted for writing.
-        capturedFrameCount > droppedFrameCount
+        capturedFrameCount > 0
     }
 }
 
@@ -37,7 +34,8 @@ enum CaptureDropRecoveryPolicy {
               result.capturedFrameCount > 0
         else { return false }
 
-        return Double(droppedFrames) / Double(result.capturedFrameCount)
+        let observedFrames = result.capturedFrameCount + droppedFrames
+        return Double(droppedFrames) / Double(observedFrames)
             <= maximumRecoverableFraction
     }
 

@@ -498,10 +498,6 @@ private final class WriteState: @unchecked Sendable {
     }
 
     func write(_ buffer: AVAudioPCMBuffer, countsAsCaptured: Bool = true) {
-        if countsAsCaptured {
-            recordCapturedFrames(buffer.frameLength)
-        }
-
         do {
             if audioFormatsMatch(buffer.format, audioFile.processingFormat) {
                 // A converter can retain delayed output. Drain it before a
@@ -511,6 +507,9 @@ private final class WriteState: @unchecked Sendable {
                 try writeBuffer(audioFile, buffer)
             } else {
                 try writeConverted(buffer)
+            }
+            if countsAsCaptured {
+                recordCapturedFrames(buffer.frameLength)
             }
         } catch {
             recordWriteError(error)
@@ -665,7 +664,6 @@ private final class WriteState: @unchecked Sendable {
 
     func recordDroppedFrames(_ frameCount: AVAudioFrameCount, error: Error) {
         lock.lock()
-        storedCapturedFrameCount += Int64(frameCount)
         storedDroppedFrameCount += Int64(frameCount)
         if storedWriteError == nil {
             storedWriteError = error

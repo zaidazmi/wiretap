@@ -747,7 +747,7 @@ final class WiretapStoreTests: XCTestCase {
     func testStopRecordingFinalizesMicrophoneOnlyWhenSystemAudioHasOnlyDroppedFrames() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(stopResult: CaptureStopResult(
-            capturedFrameCount: 512,
+            capturedFrameCount: 0,
             droppedFrameCount: 512,
             writeError: AudioBufferListFileWriterError.sampleBufferUnavailable(frameCount: 512)
         ))

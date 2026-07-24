@@ -83,7 +83,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         let result = writer.flush()
 
         XCTAssertNotNil(result.writeError)
-        XCTAssertEqual(result.capturedFrameCount, Int64(buffer.frameLength * 2))
+        XCTAssertEqual(result.capturedFrameCount, Int64(buffer.frameLength))
         XCTAssertEqual(result.droppedFrameCount, Int64(buffer.frameLength))
     }
 
@@ -108,7 +108,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         writer.write(inputData: buffer.audioBufferList)
         let result = writer.flush()
 
-        XCTAssertEqual(result.capturedFrameCount, Int64(buffer.frameLength) + 240)
+        XCTAssertEqual(result.capturedFrameCount, Int64(buffer.frameLength))
         XCTAssertEqual(result.droppedFrameCount, 240)
         guard case .sampleBufferUnavailable = result.writeError as? AudioBufferListFileWriterError else {
             return XCTFail("Expected a sample-buffer error")
@@ -226,7 +226,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         writer = nil
 
         XCTAssertNotNil(result?.writeError)
-        XCTAssertEqual(result?.capturedFrameCount, Int64(buffer.frameLength))
+        XCTAssertEqual(result?.capturedFrameCount, 0)
         XCTAssertEqual(result?.droppedFrameCount, Int64(buffer.frameLength))
     }
 
@@ -254,7 +254,7 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         let result = writer.flush()
 
         XCTAssertNotNil(result.writeError)
-        XCTAssertGreaterThan(result.capturedFrameCount, 0)
+        XCTAssertEqual(result.capturedFrameCount, 0)
     }
 
     func testFlushReportsCapturedFrameCount() throws {

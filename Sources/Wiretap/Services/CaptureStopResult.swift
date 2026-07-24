@@ -39,9 +39,16 @@ enum CaptureDropRecoveryPolicy {
     }
 
     static func canRecover(_ error: Error, result: CaptureStopResult) -> Bool {
-        guard let writerError = error as? AudioBufferListFileWriterError,
-              case .bufferPoolExhausted = writerError
-        else { return false }
+        guard let writerError = error as? AudioBufferListFileWriterError else {
+            return false
+        }
+
+        switch writerError {
+        case .bufferPoolExhausted, .sampleBufferUnavailable:
+            break
+        case .bufferExceedsPoolCapacity, .formatConversionFailed:
+            return false
+        }
 
         return canRecover(result)
     }

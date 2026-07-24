@@ -23,6 +23,20 @@ final class CaptureDropRecoveryPolicyTests: XCTestCase {
         XCTAssertFalse(CaptureDropRecoveryPolicy.canRecover(result))
     }
 
+    func testRecoversOneTransientSystemSampleBufferFailure() {
+        let result = CaptureStopResult(
+            capturedFrameCount: 480_512,
+            droppedFrameCount: 512,
+            writeError: AudioBufferListFileWriterError.sampleBufferUnavailable(frameCount: 512)
+        )
+
+        XCTAssertTrue(CaptureDropRecoveryPolicy.canRecover(result))
+        XCTAssertTrue(CaptureDropRecoveryPolicy.canRecover(
+            try XCTUnwrap(result.writeError),
+            result: result
+        ))
+    }
+
     func testRejectsNonPoolWriteErrorEvenWhenDropIsShort() {
         let result = CaptureStopResult(
             capturedFrameCount: 48_000,

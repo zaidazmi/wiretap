@@ -162,6 +162,13 @@ final class AudioBufferListFileWriter {
         write(inputData: inputData, sampleTime: nil)
     }
 
+    func recordDroppedFrames(
+        _ frameCount: AVAudioFrameCount,
+        error: AudioBufferListFileWriterError
+    ) {
+        state.recordDroppedFrames(frameCount, error: error)
+    }
+
     func write(
         inputData: UnsafePointer<AudioBufferList>,
         sampleTime: Float64?,
@@ -388,6 +395,7 @@ struct AudioFileWriterFlushResult {
 enum AudioBufferListFileWriterError: LocalizedError {
     case bufferPoolExhausted(frameCount: AVAudioFrameCount)
     case bufferExceedsPoolCapacity(frameCount: AVAudioFrameCount, capacity: AVAudioFrameCount)
+    case sampleBufferUnavailable(frameCount: AVAudioFrameCount)
     case formatConversionFailed
 
     var errorDescription: String? {
@@ -396,6 +404,8 @@ enum AudioBufferListFileWriterError: LocalizedError {
             "Wiretap dropped \(frameCount) audio frames because the capture buffer pool was exhausted."
         case let .bufferExceedsPoolCapacity(frameCount, capacity):
             "Wiretap dropped \(frameCount) audio frames because the capture buffer exceeded the pool capacity of \(capacity) frames."
+        case let .sampleBufferUnavailable(frameCount):
+            "Wiretap could not read a system-audio sample buffer containing \(frameCount) frames."
         case .formatConversionFailed:
             "Wiretap could not convert captured audio to the recording's file format."
         }

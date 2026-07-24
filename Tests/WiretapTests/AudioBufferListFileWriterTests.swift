@@ -87,6 +87,34 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(result.droppedFrameCount, Int64(buffer.frameLength))
     }
 
+    func testExternallyRejectedSampleBufferIsCountedAsDropped() throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("sample-buffer-drop.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.01)
+        let writer = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        writer.recordDroppedFrames(
+            240,
+            error: .sampleBufferUnavailable(frameCount: 240)
+        )
+        writer.write(inputData: buffer.audioBufferList)
+        let result = writer.flush()
+
+        XCTAssertEqual(result.capturedFrameCount, Int64(buffer.frameLength) + 240)
+        XCTAssertEqual(result.droppedFrameCount, 240)
+        guard case .sampleBufferUnavailable = result.writeError as? AudioBufferListFileWriterError else {
+            return XCTFail("Expected a sample-buffer error")
+        }
+    }
+
     func testDefaultBufferPoolAbsorbsShortWriterStallWithoutDroppingFrames() throws {
         let outputURL = temporaryDirectory.appendingPathComponent("default-pool-stall.caf")
         let format = try XCTUnwrap(AVAudioFormat(

@@ -431,33 +431,46 @@ extension SystemAudioTap: SCStreamDelegate, SCStreamOutput {
 
         // The buffer-list pointers are only valid inside this scope; the
         // writer copies synchronously before queueing the file write.
-        try? sampleBuffer.withAudioBufferList { audioBufferList, _ in
-            guard let streamDescription = sampleBuffer.formatDescription?.audioStreamBasicDescription,
-                  let format = AVAudioFormat(
-                    standardFormatWithSampleRate: streamDescription.mSampleRate,
-                    channels: max(1, streamDescription.mChannelsPerFrame)
-                  ),
-                  let buffer = AVAudioPCMBuffer(
-                    pcmFormat: format,
-                    bufferListNoCopy: audioBufferList.unsafePointer
-                  )
-            else { return }
-
-            let sampleTime = SystemAudioSampleClock.sampleTime(
-                presentationTime: presentationTime,
-                sampleRate: format.sampleRate
-            )
-            if !didReceiveAudio {
-                if let timelineOriginSeconds {
-                    writer.anchorTimeline(at: timelineOriginSeconds * format.sampleRate)
+        do {
+            try sampleBuffer.withAudioBufferList { audioBufferList, _ in
+                guard let streamDescription = sampleBuffer.formatDescription?.audioStreamBasicDescription,
+                      let format = AVAudioFormat(
+                        standardFormatWithSampleRate: streamDescription.mSampleRate,
+                        channels: max(1, streamDescription.mChannelsPerFrame)
+                      ),
+                      let buffer = AVAudioPCMBuffer(
+                        pcmFormat: format,
+                        bufferListNoCopy: audioBufferList.unsafePointer
+                      )
+                else {
+                    throw SystemAudioTapError.unsupportedFormat
                 }
-                didReceiveAudio = true
-                self.timelineOriginSeconds = nil
+
+                let sampleTime = SystemAudioSampleClock.sampleTime(
+                    presentationTime: presentationTime,
+                    sampleRate: format.sampleRate
+                )
+                if !didReceiveAudio {
+                    if let timelineOriginSeconds {
+                        writer.anchorTimeline(at: timelineOriginSeconds * format.sampleRate)
+                    }
+                    didReceiveAudio = true
+                    self.timelineOriginSeconds = nil
+                }
+                writer.write(
+                    buffer: buffer,
+                    sampleTime: sampleTime,
+                    bufferStartUptime: presentationTime.seconds
+                )
             }
-            writer.write(
-                buffer: buffer,
-                sampleTime: sampleTime,
-                bufferStartUptime: presentationTime.seconds
+        } catch {
+            let frameCount = AVAudioFrameCount(clamping: max(0, sampleBuffer.numSamples))
+            writer.recordDroppedFrames(
+                frameCount,
+                error: .sampleBufferUnavailable(frameCount: frameCount)
+            )
+            logger.error(
+                "System audio sample buffer unavailable frames=\(frameCount, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
         }
     }

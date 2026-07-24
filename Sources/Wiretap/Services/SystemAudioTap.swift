@@ -29,7 +29,12 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     private let outputQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.system-audio-capture", qos: .userInitiated)
     private let stateLock = NSLock()
     private var stream: SCStream?
+    // Accessed only on outputQueue. The stream identity prevents callbacks from
+    // an asynchronously stopping stream from entering a later recording.
+    private var activeStreamID: ObjectIdentifier?
     private var writer: AudioBufferListFileWriter?
+    private var timelineOriginSeconds: TimeInterval?
+    private var didReceiveAudio = false
     private var cachedDisplay: SCDisplay?
     private var lastContentError: Error?
     private var contentRefreshInProgress = false
@@ -37,11 +42,11 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     private let logger = WiretapLog.capture
 
     var isRunning: Bool {
-        writer != nil
+        outputQueue.sync { activeStreamID != nil && writer != nil }
     }
 
     var capturedFrameCount: Int64 {
-        writer?.capturedFrameCount ?? 0
+        outputQueue.sync { writer?.capturedFrameCount ?? 0 }
     }
 
     /// Resolves shareable content ahead of time so recording can start
@@ -57,7 +62,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     }
 
     func start(writingTo outputURL: URL) throws {
-        guard writer == nil else { return }
+        guard !isRunning else { return }
 
         do {
             let display = try resolveDisplay()
@@ -93,10 +98,13 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
 
-            outputQueue.sync {
-                self.writer = writer
-            }
             self.stream = stream
+            outputQueue.sync {
+                self.activeStreamID = ObjectIdentifier(stream)
+                self.writer = writer
+                self.timelineOriginSeconds = nil
+                self.didReceiveAudio = false
+            }
 
             stream.startCapture { [weak self] error in
                 guard let error else { return }
@@ -113,17 +121,26 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             let mappedError = SystemAudioTapError.map(error)
             logger.error("System audio capture failed: \(mappedError.localizedDescription, privacy: .public)")
             stopStream()
-            outputQueue.sync { self.writer = nil }
+            outputQueue.sync {
+                self.activeStreamID = nil
+                self.writer = nil
+                self.timelineOriginSeconds = nil
+                self.didReceiveAudio = false
+            }
             throw mappedError
         }
     }
 
     @discardableResult
     func stop() -> CaptureStopResult {
-        let writer = self.writer
         stopStream()
-        outputQueue.sync {
+        let writer = outputQueue.sync {
+            let writer = self.writer
+            self.activeStreamID = nil
             self.writer = nil
+            self.timelineOriginSeconds = nil
+            self.didReceiveAudio = false
+            return writer
         }
 
         let flushResult = writer?.flush()
@@ -306,15 +323,24 @@ extension SystemAudioTap: SCStreamDelegate, SCStreamOutput {
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of type: SCStreamOutputType
     ) {
-        guard type == .audio,
+        guard activeStreamID == ObjectIdentifier(stream),
               sampleBuffer.isValid,
               let writer
         else { return }
 
         let presentationTime = sampleBuffer.presentationTimeStamp
-        let sampleTime: Float64? = presentationTime.isValid
-            ? presentationTime.seconds * Self.sampleRate
-            : nil
+        if type == .screen {
+            guard !didReceiveAudio,
+                  timelineOriginSeconds == nil,
+                  presentationTime.isValid,
+                  presentationTime.seconds.isFinite
+            else { return }
+
+            timelineOriginSeconds = presentationTime.seconds
+            return
+        }
+
+        guard type == .audio else { return }
 
         // The buffer-list pointers are only valid inside this scope; the
         // writer copies synchronously before queueing the file write.
@@ -330,8 +356,34 @@ extension SystemAudioTap: SCStreamDelegate, SCStreamOutput {
                   )
             else { return }
 
+            let sampleTime = SystemAudioSampleClock.sampleTime(
+                presentationTime: presentationTime,
+                sampleRate: format.sampleRate
+            )
+            if !didReceiveAudio {
+                if let timelineOriginSeconds {
+                    writer.anchorTimeline(at: timelineOriginSeconds * format.sampleRate)
+                }
+                didReceiveAudio = true
+                self.timelineOriginSeconds = nil
+            }
             writer.write(buffer: buffer, sampleTime: sampleTime)
         }
+    }
+}
+
+enum SystemAudioSampleClock {
+    static func sampleTime(
+        presentationTime: CMTime,
+        sampleRate: Double
+    ) -> Float64? {
+        guard presentationTime.isValid,
+              presentationTime.seconds.isFinite,
+              sampleRate.isFinite,
+              sampleRate > 0
+        else { return nil }
+
+        return presentationTime.seconds * sampleRate
     }
 }
 

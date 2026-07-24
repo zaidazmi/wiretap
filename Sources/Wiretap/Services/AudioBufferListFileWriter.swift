@@ -17,9 +17,11 @@ final class AudioBufferListFileWriter {
     // by filling those gaps with silence.
     private var expectedNextSampleTime: Float64?
 
-    // Skip filling sub-threshold gaps (timestamp jitter); ignore absurd jumps
-    // that indicate a clock-domain reset rather than real silence.
-    private static let minimumGapFrames: Float64 = 512
+    // Ignore sub-frame timestamp jitter and absurd jumps that indicate a
+    // clock-domain reset rather than real silence. A fixed 512-frame threshold
+    // loses real gaps from Bluetooth voice streams, whose callbacks can be much
+    // smaller than 512 frames.
+    private static let minimumGapFrames: Float64 = 1
     private static let maximumGapSeconds: Float64 = 6 * 60 * 60
 
     init(
@@ -116,6 +118,15 @@ final class AudioBufferListFileWriter {
         }
     }
 
+    /// Establishes the capture clock's file-timeline origin before the first
+    /// audio buffer arrives. ScreenCaptureKit can omit audio callbacks while
+    /// the system is silent, so without an explicit origin the first audible
+    /// packet would be shifted to the beginning of the recording.
+    func anchorTimeline(at sampleTime: Float64) {
+        guard sampleTime.isFinite else { return }
+        anchorTimelineIfNeeded(at: sampleTime)
+    }
+
     func write(buffer: AVAudioPCMBuffer, sampleTime: Float64? = nil) {
         updateInputFormat(buffer.format)
         write(inputData: buffer.audioBufferList, sampleTime: sampleTime)
@@ -174,7 +185,7 @@ final class AudioBufferListFileWriter {
 
         guard let expected else { return 0 }
 
-        let gap = sampleTime - expected
+        let gap = (sampleTime - expected).rounded()
         guard gap >= Self.minimumGapFrames,
               gap <= Self.maximumGapSeconds * sampleRate
         else { return 0 }
@@ -404,6 +415,10 @@ private final class WriteState: @unchecked Sendable {
 
         do {
             if audioFormatsMatch(buffer.format, audioFile.processingFormat) {
+                // A converter can retain delayed output. Drain it before a
+                // direct-format buffer so converted audio cannot be appended
+                // later, out of timeline order.
+                try drainConversion()
                 try writeBuffer(audioFile, buffer)
             } else {
                 try writeConverted(buffer)
@@ -442,48 +457,54 @@ private final class WriteState: @unchecked Sendable {
     // The converter pipelines internally and holds back output until more
     // input arrives; drain it at the end so the file keeps its tail.
     func finishConversion() {
+        do {
+            try drainConversion()
+        } catch {
+            recordWriteError(error)
+        }
+    }
+
+    private func drainConversion() throws {
         guard let converter else { return }
         self.converter = nil
 
         let targetFormat = audioFile.processingFormat
-        do {
-            while true {
-                guard let output = AVAudioPCMBuffer(
-                    pcmFormat: targetFormat,
-                    frameCapacity: 8_192
-                ) else { return }
-
-                var conversionError: NSError?
-                let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-                    inputStatus.pointee = .endOfStream
-                    return nil
-                }
-
-                switch status {
-                case .haveData:
-                    if output.frameLength > 0 {
-                        try writeBuffer(audioFile, output)
-                    }
-                case .inputRanDry, .endOfStream:
-                    if output.frameLength > 0 {
-                        try writeBuffer(audioFile, output)
-                    }
-                    return
-                case .error:
-                    throw conversionError ?? AudioBufferListFileWriterError.formatConversionFailed
-                @unknown default:
-                    return
-                }
+        while true {
+            guard let output = AVAudioPCMBuffer(
+                pcmFormat: targetFormat,
+                frameCapacity: 8_192
+            ) else {
+                throw AudioBufferListFileWriterError.formatConversionFailed
             }
-        } catch {
-            recordWriteError(error)
+
+            var conversionError: NSError?
+            let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+
+            switch status {
+            case .haveData:
+                if output.frameLength > 0 {
+                    try writeBuffer(audioFile, output)
+                }
+            case .inputRanDry, .endOfStream:
+                if output.frameLength > 0 {
+                    try writeBuffer(audioFile, output)
+                }
+                return
+            case .error:
+                throw conversionError ?? AudioBufferListFileWriterError.formatConversionFailed
+            @unknown default:
+                return
+            }
         }
     }
 
     private func writeConverted(_ buffer: AVAudioPCMBuffer) throws {
         let targetFormat = audioFile.processingFormat
         if let converter, !audioFormatsMatch(converter.inputFormat, buffer.format) {
-            self.converter = nil
+            try drainConversion()
         }
         if converter == nil {
             converter = AVAudioConverter(from: buffer.format, to: targetFormat)

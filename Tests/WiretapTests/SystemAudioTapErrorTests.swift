@@ -1,4 +1,5 @@
 import CoreAudio
+import CoreMedia
 import ScreenCaptureKit
 @testable import Wiretap
 import XCTest
@@ -65,5 +66,35 @@ final class SystemAudioTapErrorTests: XCTestCase {
         XCTAssertEqual(CaptureSourceState.notChecked.label, "Not checked")
         XCTAssertEqual(CaptureSourceState.ready.label, "Ready")
         XCTAssertEqual(CaptureSourceState.unavailable.label, "Unavailable")
+    }
+
+    func testSystemAudioSampleClockUsesDeliveredSampleRate() {
+        let presentationTime = CMTime(seconds: 2.5, preferredTimescale: 48_000)
+
+        XCTAssertEqual(
+            SystemAudioSampleClock.sampleTime(
+                presentationTime: presentationTime,
+                sampleRate: 16_000
+            ),
+            40_000
+        )
+        XCTAssertEqual(
+            SystemAudioSampleClock.sampleTime(
+                presentationTime: presentationTime,
+                sampleRate: 48_000
+            ),
+            120_000
+        )
+    }
+
+    func testSystemAudioSampleClockRejectsInvalidInputs() {
+        XCTAssertNil(SystemAudioSampleClock.sampleTime(
+            presentationTime: .invalid,
+            sampleRate: 48_000
+        ))
+        XCTAssertNil(SystemAudioSampleClock.sampleTime(
+            presentationTime: .zero,
+            sampleRate: 0
+        ))
     }
 }

@@ -293,6 +293,47 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(duration, 0.5, accuracy: 0.05)
     }
 
+    func testRepeatedFormatTransitionsDrainEachConverterInTimelineOrder() throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("repeated-format-changes.caf")
+        let fileFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: false
+        ))
+        let bluetoothVoiceFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let alternateVoiceFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 24_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let first = try makeToneBuffer(format: bluetoothVoiceFormat, duration: 0.25)
+        let direct = try makeToneBuffer(format: fileFormat, duration: 0.25, frequency: 660)
+        let last = try makeToneBuffer(format: alternateVoiceFormat, duration: 0.25, frequency: 880)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: fileFormat,
+            channelMapping: .primaryInput
+        )
+
+        writer?.write(buffer: first)
+        writer?.write(buffer: direct)
+        writer?.write(buffer: last)
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        let file = try AVAudioFile(forReading: outputURL)
+        let expectedFrames = AVAudioFramePosition(0.75 * fileFormat.sampleRate)
+        XCTAssertEqual(file.length, expectedFrames, accuracy: 32)
+    }
+
     func testPrimaryInputMappingSurvivesMonoToMultichannelVoiceChatChange() throws {
         let outputURL = temporaryDirectory.appendingPathComponent("voice-chat-format-change.caf")
         let monoFormat = try XCTUnwrap(AVAudioFormat(
@@ -364,6 +405,63 @@ final class AudioBufferListFileWriterTests: XCTestCase {
 
         XCTAssertNil(result?.writeError)
 
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.5, accuracy: 0.02)
+    }
+
+    func testBluetoothSizedSampleTimeGapIsFilledWithSilence() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("bluetooth-gap-fill.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.01)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        // Bluetooth voice callbacks are commonly 160 frames at 16 kHz. Losing
+        // one callback must preserve its 10 ms slot instead of shortening time.
+        writer?.write(inputData: buffer.audioBufferList, sampleTime: 0)
+        writer?.write(
+            inputData: buffer.audioBufferList,
+            sampleTime: Float64(buffer.frameLength * 2)
+        )
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        let file = try AVAudioFile(forReading: outputURL)
+        XCTAssertEqual(file.length, AVAudioFramePosition(buffer.frameLength * 3))
+    }
+
+    func testExplicitTimelineAnchorPreservesSilenceBeforeFirstAudioPacket() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("explicit-leading-gap.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.1)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format
+        )
+
+        writer?.anchorTimeline(at: 0)
+        writer?.write(
+            inputData: buffer.audioBufferList,
+            sampleTime: 0.4 * format.sampleRate
+        )
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
         let asset = AVURLAsset(url: outputURL)
         let duration = try await asset.load(.duration).seconds
         XCTAssertEqual(duration, 0.5, accuracy: 0.02)

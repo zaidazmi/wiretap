@@ -16,7 +16,8 @@ final class AudioDeviceFormatObserver {
     }
 
     private let queue: DispatchQueue
-    private var deviceID: AudioObjectID?
+    private let stateLock = NSLock()
+    private var generation: UInt64 = 0
     private var registrations: [Registration] = []
 
     init(queue: DispatchQueue) {
@@ -29,33 +30,39 @@ final class AudioDeviceFormatObserver {
 
     func start(observing deviceID: AudioObjectID, onChange: @escaping () -> Void) {
         stop()
-        self.deviceID = deviceID
+        let generation = stateLock.withLock {
+            self.generation &+= 1
+            return self.generation
+        }
 
         for address in Self.devicePropertyAddresses {
-            addRegistration(objectID: deviceID, address: address, onChange: onChange)
+            addRegistration(
+                objectID: deviceID,
+                address: address,
+                generation: generation,
+                onChange: onChange
+            )
         }
 
         for streamID in inputStreamIDs(for: deviceID) {
             addRegistration(
                 objectID: streamID,
                 address: Self.streamVirtualFormatAddress,
+                generation: generation,
                 onChange: onChange
             )
         }
     }
 
     func stop() {
-        for registration in registrations {
-            var address = registration.address
-            AudioObjectRemovePropertyListenerBlock(
-                registration.objectID,
-                &address,
-                queue,
-                registration.block
-            )
+        let registrations = stateLock.withLock {
+            generation &+= 1
+            let registrations = self.registrations
+            self.registrations.removeAll()
+            return registrations
         }
-        registrations.removeAll()
-        deviceID = nil
+
+        registrations.forEach(remove)
     }
 
     static var devicePropertyAddresses: [AudioObjectPropertyAddress] {
@@ -99,11 +106,12 @@ final class AudioDeviceFormatObserver {
     private func addRegistration(
         objectID: AudioObjectID,
         address: AudioObjectPropertyAddress,
+        generation: UInt64,
         onChange: @escaping () -> Void
     ) {
         var mutableAddress = address
-        let block: AudioObjectPropertyListenerBlock = { _, _ in
-            onChange()
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.performIfActive(generation: generation, onChange)
         }
         let status = AudioObjectAddPropertyListenerBlock(
             objectID,
@@ -112,10 +120,43 @@ final class AudioDeviceFormatObserver {
             block
         )
         if status == noErr {
-            registrations.append(
-                Registration(objectID: objectID, address: mutableAddress, block: block)
+            let registration = Registration(
+                objectID: objectID,
+                address: mutableAddress,
+                block: block
             )
+            let shouldKeep = stateLock.withLock {
+                guard self.generation == generation else { return false }
+                registrations.append(registration)
+                return true
+            }
+            if !shouldKeep {
+                remove(registration)
+            }
         }
+    }
+
+    private func performIfActive(
+        generation: UInt64,
+        _ action: () -> Void
+    ) {
+        stateLock.withLock {
+            guard self.generation == generation else { return }
+            // Keep stop/start mutually exclusive with the callback body so an
+            // old device cannot overwrite the new device's input format after
+            // a handoff has begun.
+            action()
+        }
+    }
+
+    private func remove(_ registration: Registration) {
+        var address = registration.address
+        AudioObjectRemovePropertyListenerBlock(
+            registration.objectID,
+            &address,
+            queue,
+            registration.block
+        )
     }
 
     private func inputStreamIDs(for deviceID: AudioObjectID) -> [AudioObjectID] {

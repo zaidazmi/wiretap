@@ -111,7 +111,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
         outputRoute: MicrophoneOutputRoute?,
         postProcessing: MicrophonePostProcessing
     ) throws {
-        let inputFormat = try inputFormat(for: device)
+        let inputFormat = try Self.inputFormat(for: device)
         let deviceUID = (try? device.uid) ?? "unknown"
         logger.info(
             "Preparing microphone capture mode=physical-device device=\(device.id, privacy: .public) uid=\(deviceUID, privacy: .private(mask: .hash)) outputRoute=\(outputRoute?.name ?? "unknown", privacy: .private(mask: .hash)) format=\(WiretapLog.audioFormatSummary(inputFormat), privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public) output=\(url.lastPathComponent, privacy: .public)"
@@ -130,22 +130,26 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
         self.ioProcID = ioProcID
         startedAt = Date()
-        formatObserver.start(observing: device.id) { [weak self] in
-            self?.refreshCaptureFormat()
-        }
+        observeFormatChanges(on: device, writer: writer)
         logger.info("Microphone capture started mode=physical-device device=\(device.id, privacy: .public) postProcessing=\(postProcessing.rawValue, privacy: .public)")
     }
 
     private func switchToDefaultInputDevice() throws {
-        guard let writer,
-              let previousDevice = device,
-              let newDevice = try system.defaultInputDevice
-        else {
+        guard let writer, let previousDevice = device else {
             throw AudioRecordingError.noDefaultInputDevice
+        }
+        guard let newDevice = try system.defaultInputDevice else {
+            // Core Audio can publish a brief "no default" state while a
+            // Bluetooth route renegotiates. Keep the current IOProc alive and
+            // wait for the settled notification instead of ending the session.
+            logger.warning(
+                "Default microphone temporarily unavailable; continuing on device=\(previousDevice.id, privacy: .public)"
+            )
+            return
         }
 
         guard newDevice.id != previousDevice.id else {
-            refreshCaptureFormat()
+            Self.refreshCaptureFormat(for: newDevice, writer: writer)
             return
         }
 
@@ -161,7 +165,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
         var silenceAccountedAt = handoffStartedAt
         do {
-            let newFormat = try inputFormat(for: newDevice)
+            let newFormat = try Self.inputFormat(for: newDevice)
             writer.updateInputFormat(newFormat)
             let newIOProcID = try createIOProc(on: newDevice, writer: writer)
             let now = Date()
@@ -171,7 +175,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
             device = newDevice
             ioProcID = newIOProcID
-            observeFormatChanges(on: newDevice)
+            observeFormatChanges(on: newDevice, writer: writer)
             logger.info(
                 "Microphone device switched from=\(previousDevice.id, privacy: .public) to=\(newDevice.id, privacy: .public) format=\(WiretapLog.audioFormatSummary(newFormat), privacy: .public) handoffSeconds=\(Date().timeIntervalSince(handoffStartedAt), privacy: .public)"
             )
@@ -180,7 +184,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
                 "Microphone switch to device=\(newDevice.id, privacy: .public) failed error=\(error.localizedDescription, privacy: .public); attempting previous device=\(previousDevice.id, privacy: .public)"
             )
             do {
-                let previousFormat = try inputFormat(for: previousDevice)
+                let previousFormat = try Self.inputFormat(for: previousDevice)
                 writer.updateInputFormat(previousFormat)
                 let restoredIOProcID = try createIOProc(on: previousDevice, writer: writer)
                 let now = Date()
@@ -189,7 +193,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
 
                 device = previousDevice
                 ioProcID = restoredIOProcID
-                observeFormatChanges(on: previousDevice)
+                observeFormatChanges(on: previousDevice, writer: writer)
                 logger.warning(
                     "Microphone capture remained on previous device=\(previousDevice.id, privacy: .public) after default-device switch failed"
                 )
@@ -231,9 +235,13 @@ final class MicrophoneRecorder: MicrophoneRecording {
         }
     }
 
-    private func observeFormatChanges(on device: AudioHardwareDevice) {
-        formatObserver.start(observing: device.id) { [weak self] in
-            self?.refreshCaptureFormat()
+    private func observeFormatChanges(
+        on device: AudioHardwareDevice,
+        writer: AudioBufferListFileWriter
+    ) {
+        formatObserver.start(observing: device.id) { [weak writer] in
+            guard let writer else { return }
+            Self.refreshCaptureFormat(for: device, writer: writer)
         }
     }
 
@@ -268,14 +276,16 @@ final class MicrophoneRecorder: MicrophoneRecording {
         )
     }
 
-    private func refreshCaptureFormat() {
-        guard let device, let writer else { return }
+    private static func refreshCaptureFormat(
+        for device: AudioHardwareDevice,
+        writer: AudioBufferListFileWriter
+    ) {
         guard let format = try? inputFormat(for: device) else { return }
 
         writer.updateInputFormat(format)
     }
 
-    private func inputFormat(for device: AudioHardwareDevice) throws -> AVAudioFormat {
+    private static func inputFormat(for device: AudioHardwareDevice) throws -> AVAudioFormat {
         let streams = try device.streams
 
         for stream in streams where (try? stream.direction) == .input {

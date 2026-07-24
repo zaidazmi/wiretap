@@ -16,6 +16,11 @@ final class AudioBufferListFileWriter {
     // nothing while no app renders audio, so the file timeline must be rebuilt
     // by filling those gaps with silence.
     private var expectedNextSampleTime: Float64?
+    // Device sample clocks are unrelated across route and format changes. Host
+    // time remains continuous, so keep the end of the last delivered buffer as
+    // the authoritative handoff boundary.
+    private var lastBufferEndUptime: TimeInterval?
+    private var pendingDiscontinuityStartUptime: TimeInterval?
 
     // Ignore sub-frame timestamp jitter and absurd jumps that indicate a
     // clock-domain reset rather than real silence. A fixed 512-frame threshold
@@ -77,7 +82,10 @@ final class AudioBufferListFileWriter {
     /// from A2DP to HFP when its microphone activates); buffers that no longer
     /// match the file's format are resampled before writing so the file keeps
     /// playing at the correct speed.
-    func updateInputFormat(_ newFormat: AVAudioFormat) {
+    func updateInputFormat(
+        _ newFormat: AVAudioFormat,
+        at uptime: TimeInterval? = nil
+    ) {
         os_unfair_lock_lock(&inputLock)
         let previousFormat = currentInputFormat
         os_unfair_lock_unlock(&inputLock)
@@ -91,13 +99,22 @@ final class AudioBufferListFileWriter {
         os_unfair_lock_lock(&inputLock)
         currentInputFormat = newFormat
         currentBufferPool = newPool
-        // Sample-time values belong to the old clock domain after a rate
-        // change; re-anchor on the next callback instead of filling a gap.
+        beginInputDiscontinuityLocked(at: resolvedUptime(uptime))
         expectedNextSampleTime = nil
         os_unfair_lock_unlock(&inputLock)
         logger.info(
             "Capture input format changed from=\(WiretapLog.audioFormatSummary(previousFormat), privacy: .public) to=\(WiretapLog.audioFormatSummary(newFormat), privacy: .public); converting to keep file format"
         )
+    }
+
+    /// Marks the boundary between devices whose sample clocks cannot be
+    /// compared. The next real buffer fills the entire host-time gap, including
+    /// default-device notification coalescing and IOProc startup latency.
+    func beginInputDiscontinuity(at uptime: TimeInterval? = nil) {
+        os_unfair_lock_lock(&inputLock)
+        beginInputDiscontinuityLocked(at: resolvedUptime(uptime))
+        expectedNextSampleTime = nil
+        os_unfair_lock_unlock(&inputLock)
     }
 
     /// Keeps the output timeline stable while capture is rebound between two
@@ -109,6 +126,7 @@ final class AudioBufferListFileWriter {
         os_unfair_lock_lock(&inputLock)
         let format = currentInputFormat
         expectedNextSampleTime = nil
+        pendingDiscontinuityStartUptime = nil
         os_unfair_lock_unlock(&inputLock)
 
         let frameCount = Int64((duration * format.sampleRate).rounded())
@@ -127,16 +145,28 @@ final class AudioBufferListFileWriter {
         anchorTimelineIfNeeded(at: sampleTime)
     }
 
-    func write(buffer: AVAudioPCMBuffer, sampleTime: Float64? = nil) {
-        updateInputFormat(buffer.format)
-        write(inputData: buffer.audioBufferList, sampleTime: sampleTime)
+    func write(
+        buffer: AVAudioPCMBuffer,
+        sampleTime: Float64? = nil,
+        bufferStartUptime: TimeInterval? = nil
+    ) {
+        updateInputFormat(buffer.format, at: bufferStartUptime)
+        write(
+            inputData: buffer.audioBufferList,
+            sampleTime: sampleTime,
+            bufferStartUptime: bufferStartUptime
+        )
     }
 
     func write(inputData: UnsafePointer<AudioBufferList>) {
         write(inputData: inputData, sampleTime: nil)
     }
 
-    func write(inputData: UnsafePointer<AudioBufferList>, sampleTime: Float64?) {
+    func write(
+        inputData: UnsafePointer<AudioBufferList>,
+        sampleTime: Float64?,
+        bufferStartUptime: TimeInterval? = nil
+    ) {
         os_unfair_lock_lock(&inputLock)
         let inputFormat = currentInputFormat
         let bufferPool = currentBufferPool
@@ -147,7 +177,8 @@ final class AudioBufferListFileWriter {
             let silenceFrames = advanceTimeline(
                 to: sampleTime,
                 frameLength: pendingBuffer.buffer.frameLength,
-                sampleRate: inputFormat.sampleRate
+                sampleRate: inputFormat.sampleRate,
+                bufferStartUptime: bufferStartUptime
             )
             if silenceFrames > 0 {
                 writeQueue.async { [state] in
@@ -173,17 +204,36 @@ final class AudioBufferListFileWriter {
     private func advanceTimeline(
         to sampleTime: Float64?,
         frameLength: AVAudioFrameCount,
-        sampleRate: Double
+        sampleRate: Double,
+        bufferStartUptime: TimeInterval?
     ) -> Int64 {
-        guard let sampleTime else { return 0 }
+        let duration = TimeInterval(frameLength) / sampleRate
+        let observedStartUptime = resolvedUptime(bufferStartUptime) - (
+            bufferStartUptime == nil ? duration : 0
+        )
 
         os_unfair_lock_lock(&inputLock)
         defer { os_unfair_lock_unlock(&inputLock) }
 
-        let expected = expectedNextSampleTime
-        expectedNextSampleTime = sampleTime + Float64(frameLength)
+        let discontinuityStartUptime = pendingDiscontinuityStartUptime
+        pendingDiscontinuityStartUptime = nil
+        lastBufferEndUptime = observedStartUptime + duration
 
-        guard let expected else { return 0 }
+        let expected = expectedNextSampleTime
+        if let sampleTime {
+            expectedNextSampleTime = sampleTime + Float64(frameLength)
+        }
+
+        if let discontinuityStartUptime {
+            let gap = ((observedStartUptime - discontinuityStartUptime) * sampleRate).rounded()
+            guard gap >= Self.minimumGapFrames,
+                  gap <= Self.maximumGapSeconds * sampleRate
+            else { return 0 }
+
+            return Int64(gap)
+        }
+
+        guard let sampleTime, let expected else { return 0 }
 
         let gap = (sampleTime - expected).rounded()
         guard gap >= Self.minimumGapFrames,
@@ -191,6 +241,19 @@ final class AudioBufferListFileWriter {
         else { return 0 }
 
         return Int64(gap)
+    }
+
+    private func beginInputDiscontinuityLocked(at uptime: TimeInterval) {
+        guard pendingDiscontinuityStartUptime == nil else { return }
+        pendingDiscontinuityStartUptime = lastBufferEndUptime ?? uptime
+    }
+
+    private func resolvedUptime(_ uptime: TimeInterval?) -> TimeInterval {
+        if let uptime, uptime.isFinite, uptime >= 0 {
+            return uptime
+        }
+
+        return ProcessInfo.processInfo.systemUptime
     }
 
     private func anchorTimelineIfNeeded(at sampleTime: Float64?) {
@@ -420,8 +483,10 @@ private final class WriteState: @unchecked Sendable {
         return storedCapturedFrameCount
     }
 
-    func write(_ buffer: AVAudioPCMBuffer) {
-        recordCapturedFrames(buffer.frameLength)
+    func write(_ buffer: AVAudioPCMBuffer, countsAsCaptured: Bool = true) {
+        if countsAsCaptured {
+            recordCapturedFrames(buffer.frameLength)
+        }
 
         do {
             if audioFormatsMatch(buffer.format, audioFile.processingFormat) {
@@ -459,7 +524,7 @@ private final class WriteState: @unchecked Sendable {
                 guard let data = buffer.mData else { continue }
                 memset(data, 0, Int(buffer.mDataByteSize))
             }
-            write(silenceBuffer)
+            write(silenceBuffer, countsAsCaptured: false)
             remaining -= Int64(chunk)
         }
     }

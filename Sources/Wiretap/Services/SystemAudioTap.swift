@@ -425,7 +425,11 @@ extension SystemAudioTap: SCStreamDelegate, SCStreamOutput {
                 didReceiveAudio = true
                 self.timelineOriginSeconds = nil
             }
-            writer.write(buffer: buffer, sampleTime: sampleTime)
+            writer.write(
+                buffer: buffer,
+                sampleTime: sampleTime,
+                bufferStartUptime: presentationTime.seconds
+            )
         }
     }
 }

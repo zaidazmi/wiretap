@@ -494,6 +494,90 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(duration, 0.4, accuracy: 0.02)
     }
 
+    func testDeviceHandoffUsesHostTimeAcrossNotificationDelay() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("host-time-device-handoff.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.1)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format,
+            channelMapping: .primaryInput
+        )
+
+        writer?.write(
+            inputData: buffer.audioBufferList,
+            sampleTime: 0,
+            bufferStartUptime: 10
+        )
+        // The route notification is handled later, but the writer retains the
+        // exact end of the old device's final buffer (10.1 s).
+        writer?.beginInputDiscontinuity(at: 10.35)
+        writer?.write(
+            inputData: buffer.audioBufferList,
+            sampleTime: 0,
+            bufferStartUptime: 10.5
+        )
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        XCTAssertEqual(result?.capturedFrameCount, Int64(buffer.frameLength * 2))
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.6, accuracy: 0.02)
+    }
+
+    func testFormatClockResetUsesHostTimeWithoutCountingInsertedSilenceAsCapture() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("host-time-format-reset.caf")
+        let originalFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let bluetoothFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let originalBuffer = try makeToneBuffer(format: originalFormat, duration: 0.1)
+        let bluetoothBuffer = try makeToneBuffer(format: bluetoothFormat, duration: 0.1)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: originalFormat,
+            channelMapping: .primaryInput
+        )
+
+        writer?.write(
+            inputData: originalBuffer.audioBufferList,
+            sampleTime: 48_000,
+            bufferStartUptime: 20
+        )
+        writer?.updateInputFormat(bluetoothFormat, at: 20.2)
+        writer?.write(
+            inputData: bluetoothBuffer.audioBufferList,
+            sampleTime: 0,
+            bufferStartUptime: 20.4
+        )
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        XCTAssertEqual(
+            result?.capturedFrameCount,
+            Int64(originalBuffer.frameLength + bluetoothBuffer.frameLength)
+        )
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.5, accuracy: 0.03)
+    }
+
     func testEmptyCallbackAnchorsTimelineForLeadingSilence() async throws {
         let outputURL = temporaryDirectory.appendingPathComponent("leading-gap.caf")
         let format = try XCTUnwrap(AVAudioFormat(

@@ -371,7 +371,10 @@ final class WiretapStore {
     }
 
     var canRecord: Bool {
-        permissionState != .denied && !isProcessingRecording && !isStartingRecording
+        permissionState != .denied
+            && !isRecording
+            && !isProcessingRecording
+            && !isStartingRecording
     }
 
     var statusTimeText: String {
@@ -434,6 +437,7 @@ final class WiretapStore {
 
     func startRecording() {
         guard !isStartingRecording else { return }
+        guard !isRecording else { return }
         guard !isProcessingRecording else {
             notice = WiretapNotice(
                 title: "Recording Is Still Saving",
@@ -719,7 +723,9 @@ final class WiretapStore {
     }
 
     func delete(_ recording: Recording) {
-        guard recording.status != .processing else { return }
+        guard recording.status != .recording,
+              recording.status != .processing
+        else { return }
 
         do {
             if playbackRecordingID == recording.id {
@@ -966,7 +972,11 @@ final class WiretapStore {
     private func updateCaptureHealth(now: Date) {
         guard isRecording else { return }
 
-        for source in activeCaptureSources {
+        // ScreenCaptureKit is allowed to omit audio buffers while the system is
+        // silent. Its delegate reports an actual stream failure, so treating a
+        // quiet interval as a stalled source produces false permission/error
+        // warnings during paused videos and silent portions of calls.
+        for source in activeCaptureSources where source == .microphone {
             let currentFrameCount = captureFrameCount(for: source)
             let previousFrameCount = activeCaptureFrameCounts[source] ?? 0
 
@@ -986,21 +996,10 @@ final class WiretapStore {
             activeCaptureStalledSources.insert(source)
             setCaptureState(.unavailable, for: source)
 
-            if source == .systemAudio, currentFrameCount == 0 {
-                // A capture stream that never delivers a single buffer is
-                // almost always a missing Screen & System Audio Recording
-                // permission.
-                notice = WiretapNotice(
-                    title: "System Audio Not Captured",
-                    message: "Wiretap is not receiving any system audio. Allow Wiretap under Privacy & Security > Screen & System Audio Recording, then relaunch Wiretap and record again.",
-                    recovery: .systemAudioSettings
-                )
-            } else {
-                notice = WiretapNotice(
-                    title: "Capture Source Stalled",
-                    message: CaptureSourceFailure.stalled(source: source).localizedDescription
-                )
-            }
+            notice = WiretapNotice(
+                title: "Capture Source Stalled",
+                message: CaptureSourceFailure.stalled(source: source).localizedDescription
+            )
         }
     }
 

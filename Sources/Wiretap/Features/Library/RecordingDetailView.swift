@@ -27,7 +27,7 @@ struct RecordingDetailView: View {
                 canReveal: recording.recoveryFolderURL != nil
                     || (recording.fileURL != nil && recording.status == .finalized),
                 canExport: recording.fileURL != nil && recording.status == .finalized,
-                canDelete: recording.status != .processing,
+                canDelete: recording.status != .recording && recording.status != .processing,
                 onReveal: { store.reveal(recording) },
                 onExport: { store.export(recording) },
                 onShare: { store.share(recording) },

@@ -157,6 +157,49 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRecordAgainCannotReplaceAnActiveRecordingSession() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let interruptedRecording = makeRecording(
+            title: "Interrupted",
+            status: .interrupted,
+            sourceSummary: RecordingInterruptionReason.systemSleep.recoverySummary
+        )
+        let systemAudioTap = FakeSystemAudioTap()
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        let store = WiretapStore(
+            recordings: [interruptedRecording],
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+        try await waitForRecordingStart(store)
+        let activeRecordingID = try XCTUnwrap(
+            store.recordings.first(where: { $0.status == .recording })?.id
+        )
+
+        XCTAssertFalse(store.canRecord)
+        XCTAssertFalse(store.canRetryRecording(interruptedRecording))
+
+        store.recordAgain(interruptedRecording)
+        await Task.yield()
+
+        XCTAssertTrue(store.isRecording)
+        XCTAssertEqual(
+            store.recordings.first(where: { $0.status == .recording })?.id,
+            activeRecordingID
+        )
+        XCTAssertEqual(store.recordings.filter { $0.status == .recording }.count, 1)
+        XCTAssertEqual(systemAudioTap.startCallCount, 1)
+        XCTAssertEqual(microphoneRecorder.startCallCount, 1)
+
+        store.preserveInterruptedRecording(reason: .appTermination)
+    }
+
+    @MainActor
     func testLoadLibraryPersistsMissingFileRepair() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let missingURL = try repository.recordingURL(for: UUID())
@@ -781,7 +824,7 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testTickWarnsAndStillFinalizesWhenCaptureSourceStalls() async throws {
+    func testTickIgnoresSilentSystemAudioButWarnsForStalledMicrophone() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap(
             stopResult: CaptureStopResult(capturedFrameCount: 48_000),
@@ -819,9 +862,16 @@ final class WiretapStoreTests: XCTestCase {
 
         store.tick(now: startedAt.addingTimeInterval(8))
 
-        XCTAssertEqual(store.systemAudioState, .unavailable)
+        XCTAssertEqual(store.systemAudioState, .ready)
+        XCTAssertEqual(store.microphoneState, .ready)
+        XCTAssertNil(store.notice)
+
+        store.tick(now: startedAt.addingTimeInterval(14))
+
+        XCTAssertEqual(store.systemAudioState, .ready)
+        XCTAssertEqual(store.microphoneState, .unavailable)
         XCTAssertEqual(store.notice?.title, "Capture Source Stalled")
-        XCTAssertTrue(store.notice?.message.localizedStandardContains("System audio") == true)
+        XCTAssertTrue(store.notice?.message.localizedStandardContains("microphone") == true)
 
         store.stopRecording()
 
@@ -1234,6 +1284,30 @@ final class WiretapStoreTests: XCTestCase {
         XCTAssertTrue(store.recordings.isEmpty)
         XCTAssertTrue(try repository.loadRecordings().isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    @MainActor
+    func testDeleteIgnoresActiveRecording() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: FakeMicrophoneRecorder(),
+            systemAudioTap: FakeSystemAudioTap(),
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 0
+        )
+
+        store.startRecording()
+        try await waitForRecordingStart(store)
+        let activeRecording = try XCTUnwrap(store.recordings.first)
+
+        store.delete(activeRecording)
+
+        XCTAssertTrue(store.isRecording)
+        XCTAssertEqual(store.recordings.first?.id, activeRecording.id)
+        XCTAssertEqual(try repository.loadRecordings().first?.id, activeRecording.id)
+
+        store.preserveInterruptedRecording(reason: .appTermination)
     }
 
     private func makeRecording(

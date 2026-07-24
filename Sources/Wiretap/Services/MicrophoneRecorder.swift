@@ -19,6 +19,7 @@ extension MicrophoneRecording {
 final class MicrophoneRecorder: MicrophoneRecording {
     private let system = AudioHardwareSystem.shared
     private let ioQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.microphone-recorder", qos: .userInitiated)
+    private let ioQueueKey = DispatchSpecificKey<Bool>()
     private var device: AudioHardwareDevice?
     private var ioProcID: AudioDeviceIOProcID?
     private var writer: AudioBufferListFileWriter?
@@ -26,6 +27,10 @@ final class MicrophoneRecorder: MicrophoneRecording {
     private var startedAt: Date?
     private lazy var formatObserver = AudioDeviceFormatObserver(queue: ioQueue)
     private let logger = WiretapLog.capture
+
+    init() {
+        ioQueue.setSpecific(key: ioQueueKey, value: true)
+    }
 
     var isRecording: Bool {
         ioProcID != nil
@@ -80,6 +85,7 @@ final class MicrophoneRecorder: MicrophoneRecording {
             AudioDeviceStop(device.id, ioProcID)
             AudioDeviceDestroyIOProcID(device.id, ioProcID)
         }
+        drainIOCallbacks()
 
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
         let flushResult = writer?.flush()
@@ -160,17 +166,15 @@ final class MicrophoneRecorder: MicrophoneRecording {
             AudioDeviceStop(previousDevice.id, previousIOProcID)
             AudioDeviceDestroyIOProcID(previousDevice.id, previousIOProcID)
         }
+        drainIOCallbacks()
+        writer.beginInputDiscontinuity()
         device = nil
         ioProcID = nil
 
-        var silenceAccountedAt = handoffStartedAt
         do {
             let newFormat = try Self.inputFormat(for: newDevice)
             writer.updateInputFormat(newFormat)
             let newIOProcID = try createIOProc(on: newDevice, writer: writer)
-            let now = Date()
-            writer.appendHandoffSilence(duration: now.timeIntervalSince(silenceAccountedAt))
-            silenceAccountedAt = now
             try startIOProc(newIOProcID, on: newDevice)
 
             device = newDevice
@@ -187,8 +191,6 @@ final class MicrophoneRecorder: MicrophoneRecording {
                 let previousFormat = try Self.inputFormat(for: previousDevice)
                 writer.updateInputFormat(previousFormat)
                 let restoredIOProcID = try createIOProc(on: previousDevice, writer: writer)
-                let now = Date()
-                writer.appendHandoffSilence(duration: now.timeIntervalSince(silenceAccountedAt))
                 try startIOProc(restoredIOProcID, on: previousDevice)
 
                 device = previousDevice
@@ -216,7 +218,14 @@ final class MicrophoneRecorder: MicrophoneRecording {
             let sampleTime = inputTime.pointee.mFlags.contains(.sampleTimeValid)
                 ? inputTime.pointee.mSampleTime
                 : nil
-            writer?.write(inputData: inputData, sampleTime: sampleTime)
+            let bufferStartUptime = inputTime.pointee.mFlags.contains(.hostTimeValid)
+                ? TimeInterval(AudioConvertHostTimeToNanos(inputTime.pointee.mHostTime)) / 1_000_000_000
+                : nil
+            writer?.write(
+                inputData: inputData,
+                sampleTime: sampleTime,
+                bufferStartUptime: bufferStartUptime
+            )
         }
         guard status == noErr, let ioProcID else {
             throw CoreAudioStatusError(status: status, operation: "create microphone IOProc")
@@ -233,6 +242,11 @@ final class MicrophoneRecorder: MicrophoneRecording {
             AudioDeviceDestroyIOProcID(device.id, ioProcID)
             throw CoreAudioStatusError(status: status, operation: "start microphone IOProc")
         }
+    }
+
+    private func drainIOCallbacks() {
+        guard DispatchQueue.getSpecific(key: ioQueueKey) != true else { return }
+        ioQueue.sync {}
     }
 
     private func observeFormatChanges(

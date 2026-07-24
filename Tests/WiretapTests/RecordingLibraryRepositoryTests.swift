@@ -429,6 +429,44 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: retainedSourceURL.path))
     }
 
+    func testRefreshedFileStatusesCompletesPartiallyInterruptedRecoveryMove() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let finalURL = try repository.recordingURL(for: id)
+        let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+        let recoveryURL = try repository.recoveryURL(for: id)
+        try FileManager.default.createDirectory(
+            at: recoveryURL,
+            withIntermediateDirectories: true
+        )
+        let retainedSystemURL = recoveryURL
+            .appendingPathComponent("\(id.uuidString)-system.caf")
+        try Data("retained system".utf8).write(to: retainedSystemURL)
+        try Data("remaining microphone".utf8).write(to: microphoneURL)
+        let activeRecording = Recording(
+            id: id,
+            title: "Partially Recovered",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 12,
+            fileURL: finalURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .processing
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [activeRecording])
+
+        let retainedMicrophoneURL = recoveryURL
+            .appendingPathComponent(microphoneURL.lastPathComponent)
+        XCTAssertEqual(refreshed.first?.status, .interrupted)
+        XCTAssertEqual(refreshed.first?.recoveryFolderURL, recoveryURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedSystemURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedMicrophoneURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: microphoneURL.path))
+    }
+
     func testRefreshedFileStatusesRestoresExistingFolderForInterruptedRow() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()

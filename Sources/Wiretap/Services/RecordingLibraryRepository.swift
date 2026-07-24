@@ -122,11 +122,13 @@ struct RecordingLibraryRepository {
                    FileManager.default.fileExists(atPath: fileURL.path) {
                     recoverableURLs.append(fileURL)
                 }
-                let recoveryFolderURL = existingRecoveryFolderIfPresent(for: recording.id)
-                    ?? (try? retainTemporaryFiles(
-                        recoverableURLs,
-                        for: recording.id
-                    ))
+                // A previous recovery attempt may have been interrupted after
+                // moving only one source. Retry the move before accepting the
+                // existing folder so every remaining source is collected.
+                let recoveryFolderURL = (try? retainTemporaryFiles(
+                    recoverableURLs,
+                    for: recording.id
+                )) ?? existingRecoveryFolderIfPresent(for: recording.id)
                 refreshed.status = .interrupted
                 refreshed.fileURL = nil
                 refreshed.recoveryFolderURL = recoveryFolderURL
@@ -230,6 +232,12 @@ struct RecordingLibraryRepository {
 
     func retainTemporaryFiles(_ urls: [URL], for id: Recording.ID) throws -> URL? {
         let recoveryURL = try recoveryURL(for: id)
+        let hadRetainedFiles = (
+            try? FileManager.default.contentsOfDirectory(
+                at: recoveryURL,
+                includingPropertiesForKeys: nil
+            )
+        )?.isEmpty == false
         try FileManager.default.createDirectory(
             at: recoveryURL,
             withIntermediateDirectories: true
@@ -253,7 +261,7 @@ struct RecordingLibraryRepository {
             }
         }
 
-        if didRetainFile {
+        if didRetainFile || hadRetainedFiles {
             return recoveryURL
         }
 

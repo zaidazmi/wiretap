@@ -34,6 +34,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     private static let shareableContentTimeout: TimeInterval = 1.5
 
     private let outputQueue = DispatchQueue(label: "dev.zaidazmi.Wiretap.system-audio-capture", qos: .userInitiated)
+    private let outputQueueKey = DispatchSpecificKey<Bool>()
     private let stateLock = NSLock()
     private var stream: SCStream?
     // Accessed only on outputQueue. The stream identity prevents callbacks from
@@ -50,12 +51,17 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     private var unexpectedStopError: Error?
     private let logger = WiretapLog.capture
 
+    override init() {
+        super.init()
+        outputQueue.setSpecific(key: outputQueueKey, value: true)
+    }
+
     var isRunning: Bool {
-        outputQueue.sync { activeStreamID != nil && writer != nil }
+        onOutputQueue { activeStreamID != nil && writer != nil }
     }
 
     var capturedFrameCount: Int64 {
-        outputQueue.sync { writer?.capturedFrameCount ?? 0 }
+        onOutputQueue { writer?.capturedFrameCount ?? 0 }
     }
 
     /// Resolves shareable content ahead of time so recording can start
@@ -86,7 +92,10 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             let configuration = SCStreamConfiguration()
             configuration.width = 2
             configuration.height = 2
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale.max)
+            // Only the first screen frame is used as the audio timeline
+            // anchor. Throttle subsequent 2×2 frames to avoid running a
+            // display-rate video pipeline throughout long audio recordings.
+            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
             configuration.showsCursor = false
             configuration.capturesAudio = true
             configuration.excludesCurrentProcessAudio = true
@@ -119,7 +128,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
                 self.stream = stream
                 unexpectedStopError = nil
             }
-            outputQueue.sync {
+            onOutputQueue {
                 self.activeStreamID = ObjectIdentifier(stream)
                 self.writer = writer
                 self.timelineOriginSeconds = nil
@@ -148,7 +157,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             if let attemptedStream {
                 stopStream(attemptedStream)
             }
-            outputQueue.sync {
+            onOutputQueue {
                 if let attemptedStream,
                    let activeStreamID = self.activeStreamID,
                    activeStreamID != ObjectIdentifier(attemptedStream) {
@@ -166,7 +175,7 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
     @discardableResult
     func stop() -> CaptureStopResult {
         stopStream()
-        let writer = outputQueue.sync {
+        let writer = onOutputQueue {
             let writer = self.writer
             self.activeStreamID = nil
             self.writer = nil
@@ -224,7 +233,19 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             throw SystemAudioTapError.permissionDenied
         }
         if let display = initialState.display {
-            return display
+            if CGDisplayIsOnline(display.displayID) != 0 {
+                return display
+            }
+
+            // Prewarming can outlive an external display. Never reuse an
+            // offline SCDisplay, because startCapture otherwise fails even
+            // though another online display is available.
+            stateLock.withLock {
+                if cachedDisplay?.displayID == display.displayID {
+                    cachedDisplay = nil
+                    lastContentError = nil
+                }
+            }
         }
 
         let canAttemptCapture = stateLock.withLock {
@@ -329,6 +350,14 @@ final class SystemAudioTap: NSObject, SystemAudioTapping, @unchecked Sendable {
             permissionRequestState.recordPermissionFailure()
         }
     }
+
+    private func onOutputQueue<T>(_ action: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: outputQueueKey) == true {
+            return action()
+        }
+
+        return outputQueue.sync(execute: action)
+    }
 }
 
 struct ScreenCapturePermissionRequestState: Equatable {
@@ -362,7 +391,7 @@ extension SystemAudioTap: SCStreamDelegate, SCStreamOutput {
         }
         guard let handler else { return }
 
-        outputQueue.sync {
+        onOutputQueue {
             if activeStreamID == ObjectIdentifier(stream) {
                 activeStreamID = nil
             }

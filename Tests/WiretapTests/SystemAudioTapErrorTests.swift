@@ -5,6 +5,14 @@ import ScreenCaptureKit
 import XCTest
 
 final class SystemAudioTapErrorTests: XCTestCase {
+    func testSystemAudioTapStartsInAStoppedEmptyState() {
+        let tap = SystemAudioTap()
+
+        XCTAssertFalse(tap.isRunning)
+        XCTAssertEqual(tap.capturedFrameCount, 0)
+        XCTAssertEqual(tap.stop().capturedFrameCount, 0)
+    }
+
     func testScreenCapturePermissionRequestStatePreventsRepeatedPrompts() {
         var state = ScreenCapturePermissionRequestState()
 

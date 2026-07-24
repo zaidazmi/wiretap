@@ -70,6 +70,10 @@ final class RecordingModelTests: XCTestCase {
             RecordingInterruptionReason.systemAudioCaptureFailed.noticeMessage
                 .localizedStandardContains("stopped unexpectedly")
         )
+        XCTAssertTrue(
+            RecordingInterruptionReason.lowDiskSpace.recoverySummary
+                .localizedStandardContains("disk space ran out")
+        )
         XCTAssertEqual(
             RecordingInterruptionReason.unexpectedShutdown.recoverySummary,
             "Interrupted - source files retained after unexpected shutdown"

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftData
 
@@ -83,7 +84,10 @@ struct RecordingLibraryRepository {
             switch recording.status {
             case .finalized:
                 guard let fileURL = recording.fileURL,
-                      FileManager.default.fileExists(atPath: fileURL.path)
+                      isUsableFinalizedFile(
+                        fileURL,
+                        expectedDuration: recording.duration
+                      )
                 else {
                     refreshed.status = .missingFile
                     refreshed.fileSizeBytes = 0
@@ -94,22 +98,33 @@ struct RecordingLibraryRepository {
 
             case .missingFile:
                 if let fileURL = recording.fileURL,
-                   FileManager.default.fileExists(atPath: fileURL.path) {
+                   isUsableFinalizedFile(
+                    fileURL,
+                    expectedDuration: recording.duration
+                   ) {
                     refreshed.status = .finalized
                     refreshed.fileSizeBytes = fileSize(for: fileURL)
                 }
 
             case .recording, .processing:
                 if let fileURL = recording.fileURL,
-                   FileManager.default.fileExists(atPath: fileURL.path) {
+                   isUsableFinalizedFile(
+                    fileURL,
+                    expectedDuration: recording.duration
+                   ) {
                     refreshed.status = .finalized
                     refreshed.fileSizeBytes = fileSize(for: fileURL)
                     return refreshed
                 }
 
+                var recoverableURLs = temporarySourceURLs(for: recording.id)
+                if let fileURL = recording.fileURL,
+                   FileManager.default.fileExists(atPath: fileURL.path) {
+                    recoverableURLs.append(fileURL)
+                }
                 let recoveryFolderURL = existingRecoveryFolderIfPresent(for: recording.id)
                     ?? (try? retainTemporaryFiles(
-                        temporarySourceURLs(for: recording.id),
+                        recoverableURLs,
                         for: recording.id
                     ))
                 refreshed.status = .interrupted
@@ -221,14 +236,21 @@ struct RecordingLibraryRepository {
         )
 
         var didRetainFile = false
+        var firstError: Error?
         for url in urls where FileManager.default.fileExists(atPath: url.path) {
             let destinationURL = recoveryURL.appendingPathComponent(url.lastPathComponent)
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
-            }
+            do {
+                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    try FileManager.default.removeItem(at: destinationURL)
+                }
 
-            try FileManager.default.moveItem(at: url, to: destinationURL)
-            didRetainFile = true
+                try FileManager.default.moveItem(at: url, to: destinationURL)
+                didRetainFile = true
+            } catch {
+                if firstError == nil {
+                    firstError = error
+                }
+            }
         }
 
         if didRetainFile {
@@ -236,6 +258,9 @@ struct RecordingLibraryRepository {
         }
 
         try? FileManager.default.removeItem(at: recoveryURL)
+        if let firstError {
+            throw firstError
+        }
         return nil
     }
 
@@ -263,6 +288,28 @@ struct RecordingLibraryRepository {
         }
 
         return recoveryURL
+    }
+
+    private func isUsableFinalizedFile(
+        _ url: URL,
+        expectedDuration: TimeInterval
+    ) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path),
+              fileSize(for: url) > 0,
+              let file = try? AVAudioFile(forReading: url),
+              file.processingFormat.sampleRate.isFinite,
+              file.processingFormat.sampleRate > 0,
+              file.length > 0
+        else { return false }
+
+        let duration = TimeInterval(file.length) / file.processingFormat.sampleRate
+        guard duration.isFinite, duration > 0 else { return false }
+        guard expectedDuration.isFinite, expectedDuration > 0 else { return true }
+
+        // Allow encoder padding and sub-second metadata rounding, but reject a
+        // partially rendered output left behind by a crash during finalization.
+        let tolerance = min(1, max(0.1, expectedDuration * 0.001))
+        return duration + tolerance >= expectedDuration
     }
 
     private func makeModelContext() throws -> ModelContext {

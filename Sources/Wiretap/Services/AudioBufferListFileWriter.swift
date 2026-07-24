@@ -219,13 +219,16 @@ final class AudioBufferListFileWriter {
         inputFormat: AVAudioFormat,
         bufferPool: AudioPCMBufferPool
     ) -> PendingAudioBufferResult? {
-        guard let sourceBuffer = AVAudioPCMBuffer(
-            pcmFormat: inputFormat,
-            bufferListNoCopy: inputData,
-            deallocator: nil
-        ) else { return nil }
+        let sourceBuffers = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: inputData)
+        )
+        let bytesPerFrame = inputFormat.streamDescription.pointee.mBytesPerFrame
+        guard bytesPerFrame > 0 else { return nil }
 
-        let frameLength = sourceBuffer.frameLength
+        let frameLength = sourceBuffers
+            .filter { $0.mData != nil && $0.mDataByteSize > 0 }
+            .map { AVAudioFrameCount($0.mDataByteSize / bytesPerFrame) }
+            .min() ?? 0
         guard frameLength > 0 else { return nil }
 
         guard frameLength <= bufferPool.frameCapacity else {
@@ -245,7 +248,11 @@ final class AudioBufferListFileWriter {
             ))
         }
 
-        copy(sourceBuffer: sourceBuffer, into: pendingBuffer.buffer)
+        copy(
+            sourceBuffers: sourceBuffers,
+            frameLength: frameLength,
+            into: pendingBuffer.buffer
+        )
         return .success(pendingBuffer)
     }
 
@@ -259,13 +266,11 @@ final class AudioBufferListFileWriter {
     }
 
     private func copy(
-        sourceBuffer: AVAudioPCMBuffer,
+        sourceBuffers: UnsafeMutableAudioBufferListPointer,
+        frameLength: AVAudioFrameCount,
         into copiedBuffer: AVAudioPCMBuffer
     ) {
-        copiedBuffer.frameLength = sourceBuffer.frameLength
-        let sourceBuffers = UnsafeMutableAudioBufferListPointer(
-            UnsafeMutablePointer(mutating: sourceBuffer.audioBufferList)
-        )
+        copiedBuffer.frameLength = frameLength
         let destinationBuffers = UnsafeMutableAudioBufferListPointer(
             copiedBuffer.mutableAudioBufferList
         )
@@ -338,17 +343,24 @@ private final class AudioPCMBufferPool: @unchecked Sendable {
     private let format: AVAudioFormat
     let frameCapacity: AVAudioFrameCount
     private var lock = os_unfair_lock_s()
-    private var buffers: [AVAudioPCMBuffer]
+    private var buffers: [PendingAudioBuffer]
 
     init(format: AVAudioFormat, capacity: Int, frameCapacity: AVAudioFrameCount) {
         let normalizedFrameCapacity = max(1, frameCapacity)
         self.format = format
         self.frameCapacity = normalizedFrameCapacity
-        self.buffers = (0..<max(0, capacity)).compactMap { _ in
-            AVAudioPCMBuffer(
+        self.buffers = []
+        self.buffers.reserveCapacity(max(0, capacity))
+
+        for _ in 0..<max(0, capacity) {
+            guard let buffer = AVAudioPCMBuffer(
                 pcmFormat: format,
                 frameCapacity: normalizedFrameCapacity
-            )
+            ) else { continue }
+
+            let pendingBuffer = PendingAudioBuffer(buffer: buffer)
+            pendingBuffer.pool = self
+            buffers.append(pendingBuffer)
         }
     }
 
@@ -358,17 +370,15 @@ private final class AudioPCMBufferPool: @unchecked Sendable {
         else { return nil }
 
         defer { os_unfair_lock_unlock(&lock) }
-        guard let buffer = buffers.popLast() else { return nil }
-
-        return PendingAudioBuffer(buffer: buffer, recycleHandler: { [weak self, buffer] in
-            self?.recycle(buffer)
-        })
+        guard let pendingBuffer = buffers.popLast() else { return nil }
+        pendingBuffer.buffer.frameLength = frameLength
+        return pendingBuffer
     }
 
-    private func recycle(_ buffer: AVAudioPCMBuffer) {
-        buffer.frameLength = 0
+    fileprivate func recycle(_ pendingBuffer: PendingAudioBuffer) {
+        pendingBuffer.buffer.frameLength = 0
         os_unfair_lock_lock(&lock)
-        buffers.append(buffer)
+        buffers.append(pendingBuffer)
         os_unfair_lock_unlock(&lock)
     }
 }
@@ -616,14 +626,13 @@ private final class ConverterFeed: @unchecked Sendable {
 
 private final class PendingAudioBuffer: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
-    private let recycleHandler: (() -> Void)?
+    weak var pool: AudioPCMBufferPool?
 
-    init(buffer: AVAudioPCMBuffer, recycleHandler: (() -> Void)? = nil) {
+    init(buffer: AVAudioPCMBuffer) {
         self.buffer = buffer
-        self.recycleHandler = recycleHandler
     }
 
     func recycle() {
-        recycleHandler?()
+        pool?.recycle(self)
     }
 }

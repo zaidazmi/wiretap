@@ -81,17 +81,29 @@ struct AudioMixerWriter {
                     ".wiretap-mic-processed-\(UUID().uuidString).caf"
                 )
                 temporaryURLs.append(processedURL)
-                let result = try OfflineMicrophoneProcessor().applySoundIsolation(
-                    inputURL: input.url,
-                    outputURL: processedURL
-                )
-                logger.info(
-                    "Microphone post-processing=sound-isolation rawPeak=\(result.rawMetrics.peak, privacy: .public) rawRMS=\(result.rawMetrics.rootMeanSquare, privacy: .public) rawNonzero=\(result.rawMetrics.nonzeroSampleCount, privacy: .public)/\(result.rawMetrics.sampleCount, privacy: .public) processedPeak=\(result.processedMetrics.peak, privacy: .public) processedRMS=\(result.processedMetrics.rootMeanSquare, privacy: .public) processedNonzero=\(result.processedMetrics.nonzeroSampleCount, privacy: .public)/\(result.processedMetrics.sampleCount, privacy: .public)"
-                )
-                var processedInput = input
-                processedInput.url = processedURL
-                processedInput.microphonePostProcessing = .none
-                preparedInputs.append(processedInput)
+                do {
+                    let result = try OfflineMicrophoneProcessor().applySoundIsolation(
+                        inputURL: input.url,
+                        outputURL: processedURL
+                    )
+                    logger.info(
+                        "Microphone post-processing=sound-isolation rawPeak=\(result.rawMetrics.peak, privacy: .public) rawRMS=\(result.rawMetrics.rootMeanSquare, privacy: .public) rawNonzero=\(result.rawMetrics.nonzeroSampleCount, privacy: .public)/\(result.rawMetrics.sampleCount, privacy: .public) processedPeak=\(result.processedMetrics.peak, privacy: .public) processedRMS=\(result.processedMetrics.rootMeanSquare, privacy: .public) processedNonzero=\(result.processedMetrics.nonzeroSampleCount, privacy: .public)/\(result.processedMetrics.sampleCount, privacy: .public)"
+                    )
+                    var processedInput = input
+                    processedInput.url = processedURL
+                    processedInput.microphonePostProcessing = .none
+                    preparedInputs.append(processedInput)
+                } catch {
+                    // Voice isolation is an enhancement, not a prerequisite.
+                    // Keep the raw source so a missing Audio Unit or one bad
+                    // microphone file cannot discard otherwise valid audio.
+                    logger.error(
+                        "Microphone post-processing failed; falling back to raw input error=\(error.localizedDescription, privacy: .public)"
+                    )
+                    var rawInput = input
+                    rawInput.microphonePostProcessing = .none
+                    preparedInputs.append(rawInput)
+                }
             }
         }
 

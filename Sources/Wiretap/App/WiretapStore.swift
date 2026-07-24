@@ -215,6 +215,7 @@ final class WiretapStore {
     @ObservationIgnored private let fileActions: RecordingFileActions
     @ObservationIgnored private let microphoneRouteInspector: MicrophoneRouteInspector
     @ObservationIgnored private let minimumFreeDiskSpaceBytes: Int64
+    @ObservationIgnored private let availableDiskSpace: () throws -> Int64
     @ObservationIgnored private let logger = WiretapLog.capture
     @ObservationIgnored private var activeRecordingID: Recording.ID?
     @ObservationIgnored private var activeFinalURL: URL?
@@ -240,6 +241,7 @@ final class WiretapStore {
         fileActions: RecordingFileActions = .live,
         microphoneRouteInspector: MicrophoneRouteInspector = .permissive,
         minimumFreeDiskSpaceBytes: Int64 = 1_000_000_000,
+        availableDiskSpace: (() throws -> Int64)? = nil,
         captureStallThreshold: TimeInterval = 12
     ) {
         self.recordings = recordings
@@ -254,6 +256,7 @@ final class WiretapStore {
         self.fileActions = fileActions
         self.microphoneRouteInspector = microphoneRouteInspector
         self.minimumFreeDiskSpaceBytes = minimumFreeDiskSpaceBytes
+        self.availableDiskSpace = availableDiskSpace ?? repository.availableCapacityForRecordings
         self.captureStallThreshold = captureStallThreshold
         self.systemAudioTap.setRuntimeFailureHandler { [weak self] error in
             self?.handleSystemAudioCaptureFailure(error)
@@ -475,7 +478,13 @@ final class WiretapStore {
         var pendingRecordingID: Recording.ID?
 
         do {
-            try repository.ensureSufficientDiskSpace(minimumBytes: minimumFreeDiskSpaceBytes)
+            let availableBytes = try availableDiskSpace()
+            guard availableBytes >= minimumFreeDiskSpaceBytes else {
+                throw RecordingLibraryError.insufficientDiskSpace(
+                    available: availableBytes,
+                    required: minimumFreeDiskSpaceBytes
+                )
+            }
             try Task.checkCancellation()
 
             let requestedCaptureSources: Set<RecordingSource> = [.systemAudio, .microphone]
@@ -670,6 +679,15 @@ final class WiretapStore {
     func tick(now: Date = Date()) {
         if isRecording, let recordingStartedAt {
             elapsedSeconds = now.timeIntervalSince(recordingStartedAt)
+            if minimumFreeDiskSpaceBytes > 0,
+               let availableBytes = try? availableDiskSpace(),
+               availableBytes < minimumFreeDiskSpaceBytes {
+                logger.error(
+                    "Recording stopped before disk exhaustion availableBytes=\(availableBytes, privacy: .public) reserveBytes=\(self.minimumFreeDiskSpaceBytes, privacy: .public)"
+                )
+                preserveInterruptedRecording(reason: .lowDiskSpace)
+                return
+            }
             updateCaptureHealth(now: now)
         }
 

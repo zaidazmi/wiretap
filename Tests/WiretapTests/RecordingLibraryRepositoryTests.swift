@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftData
 @testable import Wiretap
@@ -232,11 +233,11 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
     func testRefreshedFileStatusesRestoresFoundMissingFilesAndInterruptsActiveRows() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let restoredURL = try repository.recordingURL(for: UUID())
-        try Data("audio".utf8).write(to: restoredURL)
+        try writeAudio(to: restoredURL, duration: 0.2)
         let missingRecording = Recording(
             title: "Restored",
             createdAt: Date(timeIntervalSince1970: 1_782_900_000),
-            duration: 8,
+            duration: 0.2,
             fileURL: restoredURL,
             fileSizeBytes: 0,
             sampleRate: 48_000,
@@ -266,12 +267,12 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let id = UUID()
         let finalURL = try repository.recordingURL(for: id)
-        try Data("mixed audio".utf8).write(to: finalURL)
+        try writeAudio(to: finalURL, duration: 0.2)
         let activeRecording = Recording(
             id: id,
             title: "Active",
             createdAt: Date(timeIntervalSince1970: 1_782_900_100),
-            duration: 8,
+            duration: 0.2,
             fileURL: finalURL,
             fileSizeBytes: 0,
             sampleRate: 48_000,
@@ -316,6 +317,40 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
             refreshed.first?.sourceSummary,
             RecordingInterruptionReason.unexpectedShutdown.recoverySummary
         )
+    }
+
+    func testRefreshedFileStatusesRetainsIncompleteMixedOutputAfterCrash() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let id = UUID()
+        let finalURL = try repository.recordingURL(for: id)
+        let microphoneURL = try repository.temporarySourceURL(for: id, source: "microphone")
+        try writeAudio(to: finalURL, duration: 0.2)
+        try Data("mic".utf8).write(to: microphoneURL)
+        let processingRecording = Recording(
+            id: id,
+            title: "Processing",
+            createdAt: Date(timeIntervalSince1970: 1_782_900_100),
+            duration: 120,
+            fileURL: finalURL,
+            fileSizeBytes: 0,
+            sampleRate: 48_000,
+            channelCount: 2,
+            sourceSummary: "System audio + default microphone",
+            status: .processing
+        )
+
+        let refreshed = repository.refreshedFileStatuses(for: [processingRecording])
+
+        let recoveryURL = try XCTUnwrap(refreshed.first?.recoveryFolderURL)
+        XCTAssertEqual(refreshed.first?.status, .interrupted)
+        XCTAssertNil(refreshed.first?.fileURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryURL.appendingPathComponent(finalURL.lastPathComponent).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: recoveryURL.appendingPathComponent(microphoneURL.lastPathComponent).path
+        ))
     }
 
     func testRefreshedFileStatusesRetainsActiveRecordingSourceFiles() throws {
@@ -462,6 +497,43 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         try repository.deleteFileIfPresent(for: recording)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: recoveryURL.path))
+    }
+
+    private func writeAudio(to url: URL, duration: TimeInterval) throws {
+        let sampleRate = 48_000.0
+        guard let format = AVAudioFormat(
+            standardFormatWithSampleRate: sampleRate,
+            channels: 2
+        ) else {
+            XCTFail("Could not create repository test audio format")
+            return
+        }
+        let frameCount = AVAudioFrameCount((duration * sampleRate).rounded())
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: frameCount
+        ), let channels = buffer.floatChannelData else {
+            XCTFail("Could not create repository test audio buffer")
+            return
+        }
+        buffer.frameLength = frameCount
+
+        for frame in 0..<Int(frameCount) {
+            let sample = Float(sin(2 * Double.pi * 440 * Double(frame) / sampleRate) * 0.1)
+            channels[0][frame] = sample
+            channels[1][frame] = sample
+        }
+
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: 2,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+        )
+        try file.write(from: buffer)
     }
 }
 

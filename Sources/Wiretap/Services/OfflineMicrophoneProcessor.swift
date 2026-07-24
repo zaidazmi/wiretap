@@ -67,20 +67,22 @@ struct OfflineMicrophoneProcessor {
             interleaved: false
         )
         var accumulator = AudioSignalAccumulator()
+        guard let inputBuffer = AVAudioPCMBuffer(
+            pcmFormat: inputFormat,
+            frameCapacity: maximumFrameCount
+        ), let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: monoFormat,
+            frameCapacity: maximumFrameCount
+        ) else {
+            throw OfflineMicrophoneProcessorError.couldNotCreateBuffer
+        }
 
         while inputFile.framePosition < inputFile.length {
             let remaining = inputFile.length - inputFile.framePosition
             let capacity = AVAudioFrameCount(min(Int64(maximumFrameCount), remaining))
-            guard let inputBuffer = AVAudioPCMBuffer(
-                pcmFormat: inputFormat,
-                frameCapacity: capacity
-            ), let outputBuffer = AVAudioPCMBuffer(
-                pcmFormat: monoFormat,
-                frameCapacity: capacity
-            ) else {
-                throw OfflineMicrophoneProcessorError.couldNotCreateBuffer
-            }
 
+            inputBuffer.frameLength = 0
+            outputBuffer.frameLength = 0
             try inputFile.read(into: inputBuffer, frameCount: capacity)
             guard inputBuffer.frameLength > 0 else { break }
             try converter.convert(to: outputBuffer, from: inputBuffer)
@@ -216,15 +218,16 @@ struct OfflineMicrophoneProcessor {
         )
         var remaining = min(outputFrameCount, inputFile.length - inputFile.framePosition)
         var accumulator = AudioSignalAccumulator()
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: inputFile.processingFormat,
+            frameCapacity: maximumFrameCount
+        ) else {
+            throw OfflineMicrophoneProcessorError.couldNotCreateBuffer
+        }
 
         while remaining > 0 {
             let frameCount = AVAudioFrameCount(min(Int64(maximumFrameCount), remaining))
-            guard let buffer = AVAudioPCMBuffer(
-                pcmFormat: inputFile.processingFormat,
-                frameCapacity: frameCount
-            ) else {
-                throw OfflineMicrophoneProcessorError.couldNotCreateBuffer
-            }
+            buffer.frameLength = 0
             try inputFile.read(into: buffer, frameCount: frameCount)
             guard buffer.frameLength > 0 else { break }
             accumulator.add(buffer)

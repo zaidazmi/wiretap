@@ -233,6 +233,28 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
     }
 
+    func testMixFallsBackWhenOptionalMicrophoneProcessingFails() async throws {
+        let systemURL = temporaryDirectory.appendingPathComponent("fallback-system.caf")
+        let missingMicrophoneURL = temporaryDirectory.appendingPathComponent("missing-microphone.caf")
+        let outputURL = temporaryDirectory.appendingPathComponent("fallback-mixed.m4a")
+        try writeTone(to: systemURL, duration: 0.2, frequency: 440)
+
+        let result = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: systemURL, source: .systemAudio),
+                AudioMixerInput(
+                    url: missingMicrophoneURL,
+                    source: .microphone,
+                    microphonePostProcessing: .soundIsolation
+                )
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertEqual(result.sources, [.systemAudio])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
+    }
+
     func testMixIgnoresMissingOffsetInputWhenCalculatingDuration() async throws {
         let missingURL = temporaryDirectory.appendingPathComponent("missing-system.m4a")
         let micURL = temporaryDirectory.appendingPathComponent("microphone-only.caf")

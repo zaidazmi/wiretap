@@ -396,6 +396,38 @@ final class WiretapStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testTickStopsAndRetainsSourcesBeforeDiskSpaceRunsOut() async throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let systemAudioTap = FakeSystemAudioTap()
+        let microphoneRecorder = FakeMicrophoneRecorder()
+        var availableBytes: Int64 = 2_000_000_000
+        let store = WiretapStore(
+            repository: repository,
+            microphoneRecorder: microphoneRecorder,
+            systemAudioTap: systemAudioTap,
+            permissionManager: PermissionManager(currentState: { .ready }),
+            minimumFreeDiskSpaceBytes: 1_000_000_000,
+            availableDiskSpace: { availableBytes }
+        )
+
+        store.startRecording()
+        try await waitForRecordingStart(store)
+        XCTAssertTrue(store.isRecording)
+
+        availableBytes = 500_000_000
+        store.tick(now: Date().addingTimeInterval(1))
+
+        XCTAssertFalse(store.isRecording)
+        let interrupted = try XCTUnwrap(store.recordings.first)
+        XCTAssertEqual(interrupted.status, .interrupted)
+        XCTAssertNotNil(interrupted.recoveryFolderURL)
+        XCTAssertTrue(
+            try XCTUnwrap(store.notice?.message)
+                .localizedStandardContains("disk filled up")
+        )
+    }
+
+    @MainActor
     func testStartRecordingBlocksLoopbackMicrophoneForSystemAndMicrophoneMode() async throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let systemAudioTap = FakeSystemAudioTap()

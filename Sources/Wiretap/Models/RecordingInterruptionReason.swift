@@ -6,6 +6,7 @@ enum RecordingInterruptionReason: String, CaseIterable, Sendable {
     case sessionInactive
     case audioDeviceChanged
     case systemAudioCaptureFailed
+    case lowDiskSpace
     case unexpectedShutdown
 
     var noticeMessage: String {
@@ -20,6 +21,8 @@ enum RecordingInterruptionReason: String, CaseIterable, Sendable {
             "Wiretap could not safely continue after the default audio device changed, so it saved the partial recording for review."
         case .systemAudioCaptureFailed:
             "System audio capture stopped unexpectedly, so Wiretap stopped the session before more audio could be missed."
+        case .lowDiskSpace:
+            "Wiretap stopped before the recording disk filled up and damaged the active source files."
         case .unexpectedShutdown:
             "Wiretap found a recording that did not shut down cleanly. Source files were retained for recovery."
         }
@@ -37,6 +40,8 @@ enum RecordingInterruptionReason: String, CaseIterable, Sendable {
             "Interrupted - source files retained after audio device change"
         case .systemAudioCaptureFailed:
             "Interrupted - source files retained after system audio capture failed"
+        case .lowDiskSpace:
+            "Interrupted - source files retained before disk space ran out"
         case .unexpectedShutdown:
             "Interrupted - source files retained after unexpected shutdown"
         }

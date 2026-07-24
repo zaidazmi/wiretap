@@ -48,6 +48,12 @@ struct AudioMixerWriter {
             timelineDuration: timelineDuration,
             outputURL: outputURL
         )
+        guard FinalizedAudioFileValidator.isUsable(
+            outputURL,
+            expectedDuration: renderedDuration
+        ) else {
+            throw AudioMixerWriterError.unusableOutput
+        }
 
         let sources = usableInputs.map(\.input.source)
         logger.info(
@@ -357,6 +363,7 @@ enum AudioMixerWriterError: LocalizedError {
     case couldNotCreateRenderBuffer
     case renderStalled
     case renderFailed
+    case unusableOutput
 
     var errorDescription: String? {
         switch self {
@@ -368,6 +375,8 @@ enum AudioMixerWriterError: LocalizedError {
             "Wiretap could not make progress while rendering the mixed audio file."
         case .renderFailed:
             "Wiretap could not render the mixed audio file."
+        case .unusableOutput:
+            "Wiretap could not verify the completed mixed audio file."
         }
     }
 }

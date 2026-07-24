@@ -84,7 +84,7 @@ struct RecordingLibraryRepository {
             switch recording.status {
             case .finalized:
                 guard let fileURL = recording.fileURL,
-                      isUsableFinalizedFile(
+                      FinalizedAudioFileValidator.isUsable(
                         fileURL,
                         expectedDuration: recording.duration
                       )
@@ -98,7 +98,7 @@ struct RecordingLibraryRepository {
 
             case .missingFile:
                 if let fileURL = recording.fileURL,
-                   isUsableFinalizedFile(
+                   FinalizedAudioFileValidator.isUsable(
                     fileURL,
                     expectedDuration: recording.duration
                    ) {
@@ -108,7 +108,7 @@ struct RecordingLibraryRepository {
 
             case .recording, .processing:
                 if let fileURL = recording.fileURL,
-                   isUsableFinalizedFile(
+                   FinalizedAudioFileValidator.isUsable(
                     fileURL,
                     expectedDuration: recording.duration
                    ) {
@@ -298,12 +298,15 @@ struct RecordingLibraryRepository {
         return recoveryURL
     }
 
-    private func isUsableFinalizedFile(
+}
+
+enum FinalizedAudioFileValidator {
+    static func isUsable(
         _ url: URL,
         expectedDuration: TimeInterval
     ) -> Bool {
         guard FileManager.default.fileExists(atPath: url.path),
-              fileSize(for: url) > 0,
+              ((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) > 0,
               let file = try? AVAudioFile(forReading: url),
               file.processingFormat.sampleRate.isFinite,
               file.processingFormat.sampleRate > 0,
@@ -312,15 +315,36 @@ struct RecordingLibraryRepository {
 
         let duration = TimeInterval(file.length) / file.processingFormat.sampleRate
         guard duration.isFinite, duration > 0 else { return false }
-        guard expectedDuration.isFinite, expectedDuration > 0 else { return true }
+        if expectedDuration.isFinite, expectedDuration > 0 {
+            // Allow encoder padding and sub-second metadata rounding, but reject
+            // a partially rendered output left behind during finalization.
+            let tolerance = min(1, max(0.1, expectedDuration * 0.001))
+            guard duration + tolerance >= expectedDuration else { return false }
+        }
 
-        // Allow encoder padding and sub-second metadata rounding, but reject a
-        // partially rendered output left behind by a crash during finalization.
-        let tolerance = min(1, max(0.1, expectedDuration * 0.001))
-        return duration + tolerance >= expectedDuration
+        // Reopen metadata alone can succeed for a container whose encoded tail
+        // was never fully committed. Decode the final small block before raw
+        // capture sources are deleted.
+        let tailFrameCount = AVAudioFrameCount(min(Int64(4_096), file.length))
+        guard tailFrameCount > 0,
+              let tailBuffer = AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: tailFrameCount
+              )
+        else { return false }
+
+        file.framePosition = max(0, file.length - AVAudioFramePosition(tailFrameCount))
+        do {
+            try file.read(into: tailBuffer, frameCount: tailFrameCount)
+            return tailBuffer.frameLength == tailFrameCount
+        } catch {
+            return false
+        }
     }
+}
 
-    private func makeModelContext() throws -> ModelContext {
+private extension RecordingLibraryRepository {
+    func makeModelContext() throws -> ModelContext {
         let schema = Schema([RecordingRecord.self])
         let configuration = ModelConfiguration(
             "WiretapLibrary",
@@ -331,7 +355,7 @@ struct RecordingLibraryRepository {
         return try ModelContext(ModelContainer(for: schema, configurations: [configuration]))
     }
 
-    private func loadLegacyRecordingsIfPresent() throws -> [Recording] {
+    func loadLegacyRecordingsIfPresent() throws -> [Recording] {
         guard FileManager.default.fileExists(atPath: legacyMetadataURL.path) else {
             return []
         }

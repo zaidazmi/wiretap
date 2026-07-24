@@ -230,6 +230,29 @@ final class RecordingLibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(refreshed.first?.fileSizeBytes, 0)
     }
 
+    func testFinalizedAudioFileValidatorRejectsCorruptedEncodedTail() throws {
+        let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
+        let fileURL = try repository.recordingURL(for: UUID())
+        try writeAudio(to: fileURL, duration: 1)
+
+        XCTAssertTrue(FinalizedAudioFileValidator.isUsable(
+            fileURL,
+            expectedDuration: 1
+        ))
+
+        let size = try XCTUnwrap(
+            fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        )
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.truncate(atOffset: UInt64(size / 2))
+        try handle.close()
+
+        XCTAssertFalse(FinalizedAudioFileValidator.isUsable(
+            fileURL,
+            expectedDuration: 1
+        ))
+    }
+
     func testRefreshedFileStatusesRestoresFoundMissingFilesAndInterruptsActiveRows() throws {
         let repository = RecordingLibraryRepository(applicationSupportDirectory: temporaryDirectory)
         let restoredURL = try repository.recordingURL(for: UUID())

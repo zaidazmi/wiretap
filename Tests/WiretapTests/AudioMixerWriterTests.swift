@@ -218,21 +218,36 @@ final class AudioMixerWriterTests: XCTestCase {
 
     func testMixBoostsQuietMicrophoneInputByDefault() async throws {
         let micURL = temporaryDirectory.appendingPathComponent("quiet-microphone.caf")
-        let outputURL = temporaryDirectory.appendingPathComponent("boosted-microphone.m4a")
+        let unityOutputURL = temporaryDirectory.appendingPathComponent("unity-microphone.m4a")
+        let boostedOutputURL = temporaryDirectory.appendingPathComponent("boosted-microphone.m4a")
         try writeTone(to: micURL, duration: 0.24, frequency: 660, amplitude: 0.02)
 
+        _ = try await AudioMixerWriter(microphoneGain: 1).mix(
+            inputs: [
+                AudioMixerInput(url: micURL, source: .microphone)
+            ],
+            outputURL: unityOutputURL
+        )
         _ = try await AudioMixerWriter().mix(
             inputs: [
                 AudioMixerInput(url: micURL, source: .microphone)
             ],
-            outputURL: outputURL
+            outputURL: boostedOutputURL
         )
 
-        XCTAssertGreaterThan(
-            try averageAbsoluteAmplitude(in: outputURL, from: 0.04, duration: 0.12),
-            0.025
+        let unityAmplitude = try averageAbsoluteAmplitude(
+            in: unityOutputURL,
+            from: 0.04,
+            duration: 0.12
         )
-        XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: outputURL), 0.12)
+        let boostedAmplitude = try averageAbsoluteAmplitude(
+            in: boostedOutputURL,
+            from: 0.04,
+            duration: 0.12
+        )
+        XCTAssertGreaterThan(boostedAmplitude, unityAmplitude * 3.5)
+        XCTAssertLessThan(boostedAmplitude, unityAmplitude * 4.5)
+        XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: boostedOutputURL), 0.12)
     }
 
     func testMixCanKeepMicrophoneAtUnityGain() async throws {

@@ -9,12 +9,17 @@ struct AudioMixerWriter {
     private let limiter = AudioSampleLimiter(ceiling: 0.95)
     private let maximumConsecutiveRenderStalls = 128
     private let microphoneGain: Float
+    private static let maximumGainDecibels: Float = 24
+    private static let maximumLinearGain = pow(10, maximumGainDecibels / 20)
 
     // Raw physical-device capture does not apply the automatic gain that the
-    // former live voice-processing path supplied. Restore roughly +9.5 dB so
-    // speech remains intelligible beside full-level system audio.
-    init(microphoneGain: Float = 3.0) {
-        self.microphoneGain = max(0, microphoneGain)
+    // former live voice-processing path supplied. Restore roughly +12 dB so
+    // speech remains clear beside full-level system audio.
+    init(microphoneGain: Float = 4.0) {
+        self.microphoneGain = min(
+            max(0, microphoneGain),
+            Self.maximumLinearGain
+        )
     }
 
     func mix(inputs: [AudioMixerInput], outputURL: URL) async throws -> AudioMixResult {
@@ -178,20 +183,25 @@ struct AudioMixerWriter {
         }
 
         let engine = AVAudioEngine()
-        let playerNodes = try renderInputs.map { input in
+        let playbackNodes = try renderInputs.map { input in
             let playerNode = AVAudioPlayerNode()
 
             let file = try AVAudioFile(forReading: input.input.input.url)
-            playerNode.volume = sourceGain(for: input.input.input.source)
             let startFrame = AVAudioFramePosition(round(input.input.input.startOffset * outputSampleRate))
             let startTime = startFrame > 0
                 ? AVAudioTime(sampleTime: startFrame, atRate: outputSampleRate)
                 : nil
             engine.attach(playerNode)
-            engine.connect(playerNode, to: engine.mainMixerNode, format: file.processingFormat)
+            let gainUnit = connect(
+                playerNode,
+                source: input.input.input.source,
+                format: file.processingFormat,
+                in: engine
+            )
             playerNode.scheduleFile(file, at: startTime)
-            return playerNode
+            return AudioPlaybackNodes(playerNode: playerNode, gainUnit: gainUnit)
         }
+        let playerNodes = playbackNodes.map(\.playerNode)
 
         try engine.enableManualRenderingMode(
             .offline,
@@ -230,6 +240,7 @@ struct AudioMixerWriter {
             playerNodes.forEach { $0.stop() }
             engine.stop()
             engine.disableManualRenderingMode()
+            withExtendedLifetime(playbackNodes) {}
         }
 
         while engine.manualRenderingSampleTime < targetFrames {
@@ -274,6 +285,33 @@ struct AudioMixerWriter {
         case .systemAudio:
             1
         }
+    }
+
+    /// `AVAudioMixing.volume` only supports 0...1. Values above unity need an
+    /// actual gain Audio Unit; otherwise the requested microphone boost is
+    /// outside the API contract and can be silently clamped on some devices.
+    private func connect(
+        _ playerNode: AVAudioPlayerNode,
+        source: RecordingSource,
+        format: AVAudioFormat,
+        in engine: AVAudioEngine
+    ) -> AVAudioUnitEQ? {
+        let gain = sourceGain(for: source)
+        guard gain > 1 else {
+            playerNode.volume = gain
+            engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+            return nil
+        }
+
+        let gainUnit = AVAudioUnitEQ(numberOfBands: 0)
+        gainUnit.globalGain = min(
+            Self.maximumGainDecibels,
+            20 * log10(gain)
+        )
+        engine.attach(gainUnit)
+        engine.connect(playerNode, to: gainUnit, format: format)
+        engine.connect(gainUnit, to: engine.mainMixerNode, format: format)
+        return gainUnit
     }
 }
 
@@ -329,6 +367,12 @@ private struct RenderAudioInput {
 
         outputDuration = max(input.duration, usableTargetDuration ?? input.duration)
     }
+}
+
+private struct AudioPlaybackNodes {
+    var playerNode: AVAudioPlayerNode
+    // Retain the gain unit for the lifetime of the offline render.
+    var gainUnit: AVAudioUnitEQ?
 }
 
 struct AudioMixerInput: Sendable, Equatable {

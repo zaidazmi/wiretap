@@ -348,11 +348,9 @@ enum MicrophoneCapturePolicy {
             return .speakerProcessed
         }
 
-        if outputRoute.transportType == kAudioDeviceTransportTypeBluetooth ||
-            outputRoute.transportType == kAudioDeviceTransportTypeBluetoothLE {
-            return .raw
-        }
-
+        // Bluetooth transport alone is ambiguous: both headsets and speakers
+        // use it. Only bypass isolation when the route positively identifies
+        // an acoustically isolated output.
         if outputRoute.terminalTypes.contains(kAudioStreamTerminalTypeHeadphones) {
             return .raw
         }
@@ -367,7 +365,8 @@ enum MicrophoneCapturePolicy {
             "earphone",
             "headphone",
             "headset",
-            "in-ear"
+            "in-ear",
+            "buds"
         ]
 
         return isolatedOutputNameFragments.contains(where: normalizedName.contains)

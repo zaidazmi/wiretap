@@ -95,6 +95,7 @@ struct RecordingLibraryRepository {
                 }
 
                 refreshed.fileSizeBytes = fileSize(for: fileURL)
+                deleteTemporaryFiles(temporarySourceURLs(for: recording.id))
 
             case .missingFile:
                 if let fileURL = recording.fileURL,
@@ -104,6 +105,7 @@ struct RecordingLibraryRepository {
                    ) {
                     refreshed.status = .finalized
                     refreshed.fileSizeBytes = fileSize(for: fileURL)
+                    deleteTemporaryFiles(temporarySourceURLs(for: recording.id))
                 }
 
             case .recording, .processing:
@@ -114,6 +116,7 @@ struct RecordingLibraryRepository {
                    ) {
                     refreshed.status = .finalized
                     refreshed.fileSizeBytes = fileSize(for: fileURL)
+                    deleteTemporaryFiles(temporarySourceURLs(for: recording.id))
                     return refreshed
                 }
 

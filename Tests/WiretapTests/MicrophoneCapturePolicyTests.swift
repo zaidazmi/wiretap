@@ -25,6 +25,17 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
         XCTAssertEqual(MicrophoneCapturePolicy.postProcessing(for: route), .none)
     }
 
+    func testBluetoothSpeakerUsesSoundIsolation() {
+        let route = MicrophoneOutputRoute(
+            name: "JBL Flip 6",
+            transportType: kAudioDeviceTransportTypeBluetooth,
+            terminalTypes: [kAudioStreamTerminalTypeSpeaker]
+        )
+
+        XCTAssertEqual(MicrophoneCapturePolicy.mode(for: route), .speakerProcessed)
+        XCTAssertEqual(MicrophoneCapturePolicy.postProcessing(for: route), .soundIsolation)
+    }
+
     func testHeadphoneTerminalUsesRawCaptureWithoutLocalizedNameMatching() {
         let route = MicrophoneOutputRoute(
             name: "Auriculares externos",

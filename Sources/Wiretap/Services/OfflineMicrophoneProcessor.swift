@@ -32,6 +32,31 @@ struct OfflineMicrophoneProcessor {
         )
     }
 
+    func analyze(inputURL: URL) throws -> AudioSignalMetrics {
+        let inputFile = try AVAudioFile(
+            forReading: inputURL,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: inputFile.processingFormat,
+            frameCapacity: maximumFrameCount
+        ) else {
+            throw OfflineMicrophoneProcessorError.couldNotCreateBuffer
+        }
+
+        var accumulator = AudioSignalAccumulator()
+        while inputFile.framePosition < inputFile.length {
+            let remaining = inputFile.length - inputFile.framePosition
+            let frameCount = AVAudioFrameCount(min(Int64(maximumFrameCount), remaining))
+            buffer.frameLength = 0
+            try inputFile.read(into: buffer, frameCount: frameCount)
+            guard buffer.frameLength > 0 else { break }
+            accumulator.add(buffer)
+        }
+        return accumulator.metrics
+    }
+
     /// Copies channel zero instead of averaging the input channels. Core Audio's
     /// channel map contract guarantees that `[0]` derives the mono output only
     /// from the first input channel.
@@ -260,7 +285,11 @@ enum OfflineMicrophoneProcessingPolicy {
         // Audio Unit failed silently. Preserve the raw microphone in that case.
         let rawHasMeaningfulSignal = raw.peak >= 0.000_1
             || raw.rootMeanSquare >= 0.000_01
-        if rawHasMeaningfulSignal, processed.nonzeroSampleCount == 0 {
+        let processedHasMeaningfulSignal = processed.peak >= 0.000_1
+            || processed.rootMeanSquare >= 0.000_01
+        if rawHasMeaningfulSignal,
+           !processedHasMeaningfulSignal
+           || processed.nonzeroSampleCount == 0 {
             return false
         }
 
@@ -272,6 +301,8 @@ enum OfflineMicrophoneProcessingPolicy {
             && metrics.peak >= 0
             && metrics.rootMeanSquare.isFinite
             && metrics.rootMeanSquare >= 0
+            && metrics.activeRootMeanSquare.isFinite
+            && metrics.activeRootMeanSquare >= 0
             && metrics.sampleCount >= 0
             && metrics.nonzeroSampleCount >= 0
             && metrics.nonzeroSampleCount <= metrics.sampleCount
@@ -281,29 +312,70 @@ enum OfflineMicrophoneProcessingPolicy {
 struct AudioSignalMetrics: Equatable {
     var peak: Float = 0
     var rootMeanSquare: Float = 0
+    var activeRootMeanSquare: Float = 0
     var nonzeroSampleCount: Int64 = 0
     var sampleCount: Int64 = 0
 }
 
+enum MicrophoneLevelingPolicy {
+    static let targetActiveRootMeanSquare: Float = 0.18
+    // Raw device capture is intentionally conservative. Keep at least +15.6 dB
+    // of mic gain, and allow quiet devices up to +20 dB while the final mix
+    // limiter preserves headroom.
+    static let minimumGain: Float = 6
+    static let maximumGain: Float = 10
+    static let fallbackGain: Float = 6
+
+    static func gain(for metrics: AudioSignalMetrics) -> Float {
+        let activeLevel = metrics.activeRootMeanSquare > 0
+            ? metrics.activeRootMeanSquare
+            : metrics.rootMeanSquare
+        guard activeLevel.isFinite, activeLevel > 0 else {
+            return fallbackGain
+        }
+
+        return min(
+            maximumGain,
+            max(minimumGain, targetActiveRootMeanSquare / activeLevel)
+        )
+    }
+}
+
 private struct AudioSignalAccumulator {
+    private static let activeBlockThreshold: Float = 0.003
+
     private(set) var peak: Float = 0
     private(set) var squaredTotal: Double = 0
     private(set) var nonzeroSampleCount: Int64 = 0
     private(set) var sampleCount: Int64 = 0
+    private(set) var activeBlockRootMeanSquares: [Float] = []
 
     mutating func add(_ buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData else { return }
+        var blockSquaredTotal: Double = 0
+        var blockSampleCount: Int64 = 0
+
         for channel in 0..<Int(buffer.format.channelCount) {
             let samples = channelData[channel]
             for frame in 0..<Int(buffer.frameLength) {
                 let sample = samples[frame]
                 peak = max(peak, abs(sample))
                 squaredTotal += Double(sample * sample)
+                blockSquaredTotal += Double(sample * sample)
                 if sample != 0 {
                     nonzeroSampleCount += 1
                 }
                 sampleCount += 1
+                blockSampleCount += 1
             }
+        }
+
+        guard blockSampleCount > 0 else { return }
+        let blockRootMeanSquare = Float(
+            sqrt(blockSquaredTotal / Double(blockSampleCount))
+        )
+        if blockRootMeanSquare >= Self.activeBlockThreshold {
+            activeBlockRootMeanSquares.append(blockRootMeanSquare)
         }
     }
 
@@ -313,9 +385,21 @@ private struct AudioSignalAccumulator {
             rootMeanSquare: sampleCount > 0
                 ? Float(sqrt(squaredTotal / Double(sampleCount)))
                 : 0,
+            activeRootMeanSquare: activeRootMeanSquare,
             nonzeroSampleCount: nonzeroSampleCount,
             sampleCount: sampleCount
         )
+    }
+
+    private var activeRootMeanSquare: Float {
+        guard !activeBlockRootMeanSquares.isEmpty else { return 0 }
+        let sortedLevels = activeBlockRootMeanSquares.sorted()
+        // A high percentile ignores pauses and steady room noise without
+        // allowing one transient click to determine the entire recording.
+        let index = Int(
+            (Double(sortedLevels.count - 1) * 0.90).rounded()
+        )
+        return sortedLevels[index]
     }
 }
 

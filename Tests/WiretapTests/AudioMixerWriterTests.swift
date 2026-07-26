@@ -120,6 +120,50 @@ final class AudioMixerWriterTests: XCTestCase {
         ))
     }
 
+    func testSoundIsolationPolicyRejectsNearlySilentProcessedVoice() {
+        let raw = AudioSignalMetrics(
+            peak: 0.4,
+            rootMeanSquare: 0.1,
+            nonzeroSampleCount: 47_000,
+            sampleCount: 48_000
+        )
+        let nearlySilent = AudioSignalMetrics(
+            peak: 0.000_01,
+            rootMeanSquare: 0.000_001,
+            nonzeroSampleCount: 47_000,
+            sampleCount: 48_000
+        )
+
+        XCTAssertFalse(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(
+            OfflineMicrophoneProcessingResult(
+                rawMetrics: raw,
+                processedMetrics: nearlySilent
+            )
+        ))
+    }
+
+    func testMicrophoneLevelingRaisesQuietVoiceMoreThanNormalVoice() {
+        let quiet = AudioSignalMetrics(activeRootMeanSquare: 0.01)
+        let normal = AudioSignalMetrics(activeRootMeanSquare: 0.04)
+        let loud = AudioSignalMetrics(activeRootMeanSquare: 0.1)
+
+        XCTAssertEqual(MicrophoneLevelingPolicy.gain(for: quiet), 10, accuracy: 0.001)
+        XCTAssertEqual(MicrophoneLevelingPolicy.gain(for: normal), 6, accuracy: 0.001)
+        XCTAssertEqual(MicrophoneLevelingPolicy.gain(for: loud), 6, accuracy: 0.001)
+        XCTAssertEqual(
+            MicrophoneLevelingPolicy.gain(
+                for: AudioSignalMetrics(rootMeanSquare: 0.01)
+            ),
+            10,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            MicrophoneLevelingPolicy.gain(for: AudioSignalMetrics()),
+            6,
+            accuracy: 0.001
+        )
+    }
+
     func testSoundIsolationPolicyAcceptsCompleteSilenceForSilentInput() {
         let silent = AudioSignalMetrics(sampleCount: 48_000)
 
@@ -245,9 +289,9 @@ final class AudioMixerWriterTests: XCTestCase {
             from: 0.04,
             duration: 0.12
         )
-        XCTAssertGreaterThan(boostedAmplitude, unityAmplitude * 3.5)
-        XCTAssertLessThan(boostedAmplitude, unityAmplitude * 4.5)
-        XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: boostedOutputURL), 0.12)
+        XCTAssertGreaterThan(boostedAmplitude, unityAmplitude * 9)
+        XCTAssertLessThan(boostedAmplitude, unityAmplitude * 11)
+        XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: boostedOutputURL), 0.25)
     }
 
     func testMixCanKeepMicrophoneAtUnityGain() async throws {

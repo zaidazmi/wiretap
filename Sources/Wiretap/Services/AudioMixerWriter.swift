@@ -8,18 +8,16 @@ struct AudioMixerWriter {
     private let maximumFrameCount: AVAudioFrameCount = 4_096
     private let limiter = AudioSampleLimiter(ceiling: 0.95)
     private let maximumConsecutiveRenderStalls = 128
-    private let microphoneGain: Float
+    private let microphoneGain: Float?
     private static let maximumGainDecibels: Float = 24
     private static let maximumLinearGain = pow(10, maximumGainDecibels / 20)
 
-    // Raw physical-device capture does not apply the automatic gain that the
-    // former live voice-processing path supplied. Restore roughly +12 dB so
-    // speech remains clear beside full-level system audio.
-    init(microphoneGain: Float = 4.0) {
-        self.microphoneGain = min(
-            max(0, microphoneGain),
-            Self.maximumLinearGain
-        )
+    // A nil override enables automatic voice leveling. Tests and specialized
+    // callers can still request an exact fixed gain.
+    init(microphoneGain: Float? = nil) {
+        self.microphoneGain = microphoneGain.map {
+            min(max(0, $0), Self.maximumLinearGain)
+        }
     }
 
     func mix(inputs: [AudioMixerInput], outputURL: URL) async throws -> AudioMixResult {
@@ -192,9 +190,10 @@ struct AudioMixerWriter {
                 ? AVAudioTime(sampleTime: startFrame, atRate: outputSampleRate)
                 : nil
             engine.attach(playerNode)
+            let gain = sourceGain(for: input.input.input)
             let gainUnit = connect(
                 playerNode,
-                source: input.input.input.source,
+                gain: gain,
                 format: file.processingFormat,
                 in: engine
             )
@@ -278,12 +277,28 @@ struct AudioMixerWriter {
         return TimeInterval(targetFrames) / outputSampleRate
     }
 
-    private func sourceGain(for source: RecordingSource) -> Float {
-        switch source {
+    private func sourceGain(for input: AudioMixerInput) -> Float {
+        switch input.source {
         case .microphone:
-            microphoneGain
+            if let microphoneGain {
+                return microphoneGain
+            }
+
+            do {
+                let metrics = try OfflineMicrophoneProcessor().analyze(inputURL: input.url)
+                let gain = MicrophoneLevelingPolicy.gain(for: metrics)
+                logger.info(
+                    "Automatic microphone leveling activeRMS=\(metrics.activeRootMeanSquare, privacy: .public) overallRMS=\(metrics.rootMeanSquare, privacy: .public) peak=\(metrics.peak, privacy: .public) gain=\(gain, privacy: .public)"
+                )
+                return gain
+            } catch {
+                logger.warning(
+                    "Automatic microphone leveling analysis failed; using fallback gain=\(MicrophoneLevelingPolicy.fallbackGain, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
+                return MicrophoneLevelingPolicy.fallbackGain
+            }
         case .systemAudio:
-            1
+            return 1
         }
     }
 
@@ -292,11 +307,10 @@ struct AudioMixerWriter {
     /// outside the API contract and can be silently clamped on some devices.
     private func connect(
         _ playerNode: AVAudioPlayerNode,
-        source: RecordingSource,
+        gain: Float,
         format: AVAudioFormat,
         in engine: AVAudioEngine
     ) -> AVAudioUnitEQ? {
-        let gain = sourceGain(for: source)
         guard gain > 1 else {
             playerNode.volume = gain
             engine.connect(playerNode, to: engine.mainMixerNode, format: format)

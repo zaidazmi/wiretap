@@ -478,6 +478,86 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertEqual(duration, 0.5, accuracy: 0.02)
     }
 
+    func testVoIPHardwareSampleClockCannotInflateLowRateInputTimeline() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("voip-clock.caf")
+        let inputFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let fileFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: inputFormat, duration: 0.01)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: inputFormat,
+            fileFormat: fileFormat,
+            channelMapping: .primaryInput
+        )
+
+        for callback in 0..<30 {
+            writer?.write(
+                inputData: buffer.audioBufferList,
+                // A 48 kHz hardware clock advances 480 frames per callback
+                // while the voice stream contains 160 frames at 16 kHz.
+                sampleTime: Float64(callback * 480),
+                bufferStartUptime: 10 + Double(callback) * 0.01
+            )
+        }
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        XCTAssertEqual(
+            result?.capturedFrameCount,
+            Int64(buffer.frameLength) * 30
+        )
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.3, accuracy: 0.03)
+    }
+
+    func testReliableHostTimeStillFillsDroppedCallbackGap() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("host-gap-fill.caf")
+        let format = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let buffer = try makeToneBuffer(format: format, duration: 0.1)
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: format,
+            channelMapping: .primaryInput
+        )
+
+        writer?.write(
+            inputData: buffer.audioBufferList,
+            sampleTime: 0,
+            bufferStartUptime: 10
+        )
+        // The sample clock claims continuity, but acquisition time proves that
+        // 0.3 seconds of callbacks were not delivered.
+        writer?.write(
+            inputData: buffer.audioBufferList,
+            sampleTime: Float64(buffer.frameLength),
+            bufferStartUptime: 10.4
+        )
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.5, accuracy: 0.02)
+    }
+
     func testBluetoothSizedSampleTimeGapIsFilledWithSilence() async throws {
         let outputURL = temporaryDirectory.appendingPathComponent("bluetooth-gap-fill.caf")
         let format = try XCTUnwrap(AVAudioFormat(

@@ -24,6 +24,7 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
     // time remains continuous, so keep the end of the last delivered buffer as
     // the authoritative handoff boundary.
     private var lastBufferEndUptime: TimeInterval?
+    private var lastBufferUsedReliableHostTime = false
     private var pendingDiscontinuityStartUptime: TimeInterval?
 
     // Ignore sub-frame timestamp jitter and absurd jumps that indicate a
@@ -221,16 +222,21 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
         bufferStartUptime: TimeInterval?
     ) -> Int64 {
         let duration = TimeInterval(frameLength) / sampleRate
-        let observedStartUptime = resolvedUptime(bufferStartUptime) - (
-            bufferStartUptime == nil ? duration : 0
-        )
+        let reliableBufferStartUptime = bufferStartUptime.flatMap { uptime in
+            uptime.isFinite && uptime >= 0 ? uptime : nil
+        }
+        let observedStartUptime = reliableBufferStartUptime
+            ?? (resolvedUptime(nil) - duration)
 
         os_unfair_lock_lock(&inputLock)
         defer { os_unfair_lock_unlock(&inputLock) }
 
         let discontinuityStartUptime = pendingDiscontinuityStartUptime
         pendingDiscontinuityStartUptime = nil
+        let previousBufferEndUptime = lastBufferEndUptime
+        let previousBufferUsedReliableHostTime = lastBufferUsedReliableHostTime
         lastBufferEndUptime = observedStartUptime + duration
+        lastBufferUsedReliableHostTime = reliableBufferStartUptime != nil
 
         let expected = expectedNextSampleTime
         if let sampleTime {
@@ -239,6 +245,23 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
 
         if let discontinuityStartUptime {
             let gap = ((observedStartUptime - discontinuityStartUptime) * sampleRate).rounded()
+            guard gap >= Self.minimumGapFrames,
+                  gap <= Self.maximumGapSeconds * sampleRate
+            else { return 0 }
+
+            return Int64(gap)
+        }
+
+        // AudioDeviceIOProc sample time is expressed in the hardware device's
+        // clock. During VoIP, the stream can deliver 16 kHz audio while that
+        // clock continues at 48 kHz. Treating those values as stream frames
+        // inserts two silent frames for every real frame and triples duration.
+        // Host timestamps describe when buffers were acquired and stay in one
+        // time base across these call-mode format changes.
+        if reliableBufferStartUptime != nil,
+           previousBufferUsedReliableHostTime,
+           let previousBufferEndUptime {
+            let gap = ((observedStartUptime - previousBufferEndUptime) * sampleRate).rounded()
             guard gap >= Self.minimumGapFrames,
                   gap <= Self.maximumGapSeconds * sampleRate
             else { return 0 }

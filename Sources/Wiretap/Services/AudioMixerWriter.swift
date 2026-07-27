@@ -379,7 +379,10 @@ private struct RenderAudioInput {
             return duration
         }
 
-        outputDuration = max(input.duration, usableTargetDuration ?? input.duration)
+        // The target is the wall-clock capture duration. It pads a short source
+        // but also caps a malformed source whose device clock inflated its file
+        // timeline; final output must never outlive the recording session.
+        outputDuration = usableTargetDuration ?? input.duration
     }
 }
 

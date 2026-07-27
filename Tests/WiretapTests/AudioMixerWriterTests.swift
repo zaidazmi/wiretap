@@ -446,6 +446,28 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertLessThan(paddedAmplitude, 0.01)
     }
 
+    func testMixCapsClockInflatedSourceAtWallClockTargetDuration() async throws {
+        let micURL = temporaryDirectory.appendingPathComponent("inflated-microphone.caf")
+        let outputURL = temporaryDirectory.appendingPathComponent("capped-microphone.m4a")
+        try writeTone(to: micURL, duration: 0.9, frequency: 660)
+
+        let result = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(
+                    url: micURL,
+                    source: .microphone,
+                    targetDuration: 0.3
+                )
+            ],
+            outputURL: outputURL
+        )
+
+        XCTAssertEqual(result.duration, 0.3, accuracy: 0.03)
+        let asset = AVURLAsset(url: outputURL)
+        let assetDuration = try await asset.load(.duration).seconds
+        XCTAssertEqual(assetDuration, 0.3, accuracy: 0.03)
+    }
+
     private func writeTone(
         to url: URL,
         duration: TimeInterval,

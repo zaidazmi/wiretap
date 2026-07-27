@@ -293,6 +293,19 @@ enum OfflineMicrophoneProcessingPolicy {
             return false
         }
 
+        // Sound Isolation can occasionally return a technically nonzero file
+        // while removing every active voice block. That is not a usable
+        // enhancement: prefer speaker bleed in the raw microphone over losing
+        // the local speaker entirely.
+        let isolationCollapsedActiveVoice = raw.activeRootMeanSquare > 0
+            && processed.activeRootMeanSquare == 0
+            && raw.rootMeanSquare < raw.activeRootMeanSquare * 0.25
+            && processed.peak < raw.peak * 0.1
+            && processed.rootMeanSquare < raw.rootMeanSquare * 0.1
+        if isolationCollapsedActiveVoice {
+            return false
+        }
+
         return true
     }
 

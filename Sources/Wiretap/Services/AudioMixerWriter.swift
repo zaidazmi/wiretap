@@ -95,12 +95,14 @@ struct AudioMixerWriter {
                         inputURL: input.url,
                         outputURL: processedURL
                     )
-                    guard OfflineMicrophoneProcessingPolicy.shouldUseProcessed(result) else {
+                    let shouldUseProcessed =
+                        OfflineMicrophoneProcessingPolicy.shouldUseProcessed(result)
+                    logger.info(
+                        "Microphone post-processing=sound-isolation accepted=\(shouldUseProcessed, privacy: .public) rawPeak=\(result.rawMetrics.peak, privacy: .public) rawRMS=\(result.rawMetrics.rootMeanSquare, privacy: .public) rawActiveRMS=\(result.rawMetrics.activeRootMeanSquare, privacy: .public) rawNonzero=\(result.rawMetrics.nonzeroSampleCount, privacy: .public)/\(result.rawMetrics.sampleCount, privacy: .public) processedPeak=\(result.processedMetrics.peak, privacy: .public) processedRMS=\(result.processedMetrics.rootMeanSquare, privacy: .public) processedActiveRMS=\(result.processedMetrics.activeRootMeanSquare, privacy: .public) processedNonzero=\(result.processedMetrics.nonzeroSampleCount, privacy: .public)/\(result.processedMetrics.sampleCount, privacy: .public)"
+                    )
+                    guard shouldUseProcessed else {
                         throw OfflineMicrophoneProcessorError.unusableOutput
                     }
-                    logger.info(
-                        "Microphone post-processing=sound-isolation rawPeak=\(result.rawMetrics.peak, privacy: .public) rawRMS=\(result.rawMetrics.rootMeanSquare, privacy: .public) rawNonzero=\(result.rawMetrics.nonzeroSampleCount, privacy: .public)/\(result.rawMetrics.sampleCount, privacy: .public) processedPeak=\(result.processedMetrics.peak, privacy: .public) processedRMS=\(result.processedMetrics.rootMeanSquare, privacy: .public) processedNonzero=\(result.processedMetrics.nonzeroSampleCount, privacy: .public)/\(result.processedMetrics.sampleCount, privacy: .public)"
-                    )
                     var processedInput = input
                     processedInput.url = processedURL
                     processedInput.microphonePostProcessing = .none

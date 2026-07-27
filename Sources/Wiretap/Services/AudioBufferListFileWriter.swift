@@ -26,6 +26,7 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
     private var lastBufferEndUptime: TimeInterval?
     private var lastBufferUsedReliableHostTime = false
     private var pendingDiscontinuityStartUptime: TimeInterval?
+    private var lastObservedInterleavedChannelCount: UInt32?
 
     // Ignore sub-frame timestamp jitter and absurd jumps that indicate a
     // clock-domain reset rather than real silence. A fixed 512-frame threshold
@@ -324,9 +325,31 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
         let bytesPerFrame = inputFormat.streamDescription.pointee.mBytesPerFrame
         guard bytesPerFrame > 0 else { return nil }
 
+        // HAL can change the IOProc buffer layout before (or without) updating
+        // the stream's advertised virtual format. Native VoIP apps trigger this
+        // on the built-in microphone: a nominally mono, non-interleaved stream
+        // can arrive as one interleaved three-channel AudioBuffer.
+        let interleavedSourceChannelCount: UInt32?
+        let frameByteCount: UInt32
+        if !inputFormat.isInterleaved,
+           sourceBuffers.count == 1,
+           let source = sourceBuffers.first,
+           source.mNumberChannels > 1 {
+            interleavedSourceChannelCount = source.mNumberChannels
+            frameByteCount = bytesPerFrame * source.mNumberChannels
+            logObservedInterleavedLayout(
+                channelCount: source.mNumberChannels,
+                configuredFormat: inputFormat
+            )
+        } else {
+            interleavedSourceChannelCount = nil
+            frameByteCount = bytesPerFrame
+        }
+        guard frameByteCount > 0 else { return nil }
+
         let frameLength = sourceBuffers
             .filter { $0.mData != nil && $0.mDataByteSize > 0 }
-            .map { AVAudioFrameCount($0.mDataByteSize / bytesPerFrame) }
+            .map { AVAudioFrameCount($0.mDataByteSize / frameByteCount) }
             .min() ?? 0
         guard frameLength > 0 else { return nil }
 
@@ -350,9 +373,26 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
         copy(
             sourceBuffers: sourceBuffers,
             frameLength: frameLength,
+            interleavedSourceChannelCount: interleavedSourceChannelCount,
+            bytesPerScalarFrame: bytesPerFrame,
             into: pendingBuffer.buffer
         )
         return .success(pendingBuffer)
+    }
+
+    private func logObservedInterleavedLayout(
+        channelCount: UInt32,
+        configuredFormat: AVAudioFormat
+    ) {
+        os_unfair_lock_lock(&inputLock)
+        let shouldLog = lastObservedInterleavedChannelCount != channelCount
+        lastObservedInterleavedChannelCount = channelCount
+        os_unfair_lock_unlock(&inputLock)
+        guard shouldLog else { return }
+
+        logger.info(
+            "Capture buffer layout overrides advertised format observed=1 interleaved buffer, \(channelCount, privacy: .public) channels configured=\(WiretapLog.audioFormatSummary(configuredFormat), privacy: .public); extracting channels without inflating frame count"
+        )
     }
 
     private static func linearPCMSettings(for inputFormat: AVAudioFormat) -> [String: Any] {
@@ -367,6 +407,8 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
     private func copy(
         sourceBuffers: UnsafeMutableAudioBufferListPointer,
         frameLength: AVAudioFrameCount,
+        interleavedSourceChannelCount: UInt32?,
+        bytesPerScalarFrame: UInt32,
         into copiedBuffer: AVAudioPCMBuffer
     ) {
         copiedBuffer.frameLength = frameLength
@@ -377,6 +419,34 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
         for destination in destinationBuffers {
             guard let destinationData = destination.mData else { continue }
             memset(destinationData, 0, Int(destination.mDataByteSize))
+        }
+
+        if let interleavedSourceChannelCount,
+           let source = sourceBuffers.first,
+           let sourceData = source.mData {
+            let scalarByteCount = Int(bytesPerScalarFrame)
+            let sourceFrameStride = scalarByteCount * Int(interleavedSourceChannelCount)
+            let destinationChannelCount = min(
+                destinationBuffers.count,
+                Int(interleavedSourceChannelCount)
+            )
+
+            for channel in 0..<destinationChannelCount {
+                guard let destinationData = destinationBuffers[channel].mData else { continue }
+                for frame in 0..<Int(frameLength) {
+                    memcpy(
+                        destinationData.advanced(by: frame * scalarByteCount),
+                        sourceData.advanced(
+                            by: frame * sourceFrameStride + channel * scalarByteCount
+                        ),
+                        scalarByteCount
+                    )
+                }
+                destinationBuffers[channel].mDataByteSize = UInt32(
+                    Int(frameLength) * scalarByteCount
+                )
+            }
+            return
         }
 
         for index in 0..<min(sourceBuffers.count, destinationBuffers.count) {

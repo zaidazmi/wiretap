@@ -142,6 +142,30 @@ final class AudioMixerWriterTests: XCTestCase {
         ))
     }
 
+    func testSoundIsolationPolicyRejectsNonzeroButCollapsedCallVoice() {
+        let raw = AudioSignalMetrics(
+            peak: 0.211_224,
+            rootMeanSquare: 0.001_188,
+            activeRootMeanSquare: 0.04,
+            nonzeroSampleCount: 128_245_776,
+            sampleCount: 128_255_405
+        )
+        let collapsed = AudioSignalMetrics(
+            peak: 0.010_242,
+            rootMeanSquare: 0.000_030,
+            activeRootMeanSquare: 0,
+            nonzeroSampleCount: 60_107_546,
+            sampleCount: 128_255_405
+        )
+
+        XCTAssertFalse(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(
+            OfflineMicrophoneProcessingResult(
+                rawMetrics: raw,
+                processedMetrics: collapsed
+            )
+        ))
+    }
+
     func testMicrophoneLevelingRaisesQuietVoiceMoreThanNormalVoice() {
         let quiet = AudioSignalMetrics(activeRootMeanSquare: 0.01)
         let normal = AudioSignalMetrics(activeRootMeanSquare: 0.04)

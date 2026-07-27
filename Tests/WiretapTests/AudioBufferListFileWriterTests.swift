@@ -447,6 +447,83 @@ final class AudioBufferListFileWriterTests: XCTestCase {
         XCTAssertGreaterThan(peak, 0.20)
     }
 
+    func testIOProcBufferLayoutOverridesStaleMonoDeviceFormat() async throws {
+        let outputURL = temporaryDirectory.appendingPathComponent("voip-array-layout.caf")
+        let advertisedMonoFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let frameCount: AVAudioFrameCount = 480
+        var interleavedSamples = [Float](
+            repeating: 0,
+            count: Int(frameCount) * 3
+        )
+        for frame in 0..<Int(frameCount) {
+            let primary = Float(
+                sin(2 * Double.pi * 440 * Double(frame) / 48_000) * 0.25
+            )
+            interleavedSamples[frame * 3] = primary
+            interleavedSamples[frame * 3 + 1] = -primary
+            interleavedSamples[frame * 3 + 2] = primary * 0.5
+        }
+        var writer: AudioBufferListFileWriter? = try AudioBufferListFileWriter(
+            outputURL: outputURL,
+            inputFormat: advertisedMonoFormat,
+            channelMapping: .primaryInput
+        )
+
+        for callback in 0..<30 {
+            interleavedSamples.withUnsafeMutableBytes { bytes in
+                var bufferList = AudioBufferList(
+                    mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(
+                        mNumberChannels: 3,
+                        mDataByteSize: UInt32(bytes.count),
+                        mData: bytes.baseAddress
+                    )
+                )
+                withUnsafePointer(to: &bufferList) { pointer in
+                    writer?.write(
+                        inputData: pointer,
+                        sampleTime: Float64(callback * Int(frameCount)),
+                        bufferStartUptime: 10 + Double(callback) * 0.01
+                    )
+                }
+            }
+        }
+        let result = writer?.flush()
+        writer = nil
+
+        XCTAssertNil(result?.writeError)
+        XCTAssertEqual(
+            result?.capturedFrameCount,
+            Int64(frameCount) * 30
+        )
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 0.3, accuracy: 0.03)
+
+        let file = try AVAudioFile(
+            forReading: outputURL,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        let output = try XCTUnwrap(AVAudioPCMBuffer(
+            pcmFormat: file.processingFormat,
+            frameCapacity: AVAudioFrameCount(file.length)
+        ))
+        try file.read(into: output)
+        let samples = try XCTUnwrap(output.floatChannelData?[0])
+        for frame in [37, 109, 223, 401] {
+            let expected = Float(
+                sin(2 * Double.pi * 440 * Double(frame) / 48_000) * 0.25
+            )
+            XCTAssertEqual(samples[frame], expected, accuracy: 0.000_01)
+        }
+    }
+
     func testSampleTimeGapIsFilledWithSilence() async throws {
         let outputURL = temporaryDirectory.appendingPathComponent("gap-fill.caf")
         let format = try XCTUnwrap(AVAudioFormat(

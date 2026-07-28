@@ -297,11 +297,8 @@ enum OfflineMicrophoneProcessingPolicy {
         // while removing every active voice block. That is not a usable
         // enhancement: prefer speaker bleed in the raw microphone over losing
         // the local speaker entirely.
-        let rawSignalIsQuietOrSparse = raw.peak < 0.1
-            || raw.rootMeanSquare < raw.activeRootMeanSquare * 0.25
         let isolationCollapsedActiveVoice = raw.activeRootMeanSquare > 0
             && processed.activeRootMeanSquare == 0
-            && rawSignalIsQuietOrSparse
             && processed.peak < raw.peak * 0.1
             && processed.rootMeanSquare < raw.rootMeanSquare * 0.1
         if isolationCollapsedActiveVoice {

@@ -90,7 +90,6 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertEqual(outputFile.length, 9_600)
         XCTAssertEqual(result.rawMetrics.sampleCount, 9_600)
         XCTAssertEqual(result.processedMetrics.sampleCount, 9_600)
-        XCTAssertTrue(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(result))
     }
 
     func testSoundIsolationPolicyRejectsTruncatedOrSilentlyZeroedVoice() {
@@ -180,6 +179,33 @@ final class AudioMixerWriterTests: XCTestCase {
             activeRootMeanSquare: 0,
             nonzeroSampleCount: 755_192,
             sampleCount: 1_522_453
+        )
+
+        XCTAssertFalse(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(
+            OfflineMicrophoneProcessingResult(
+                rawMetrics: raw,
+                processedMetrics: collapsed
+            )
+        ))
+    }
+
+    func testSoundIsolationPolicyRejectsCollapsedLoudWhatsAppCallVoice() {
+        // Regression values captured from a native WhatsApp speaker call. The
+        // raw microphone contains healthy local speech, but Sound Isolation
+        // leaves a technically nonzero track with no active voice blocks.
+        let raw = AudioSignalMetrics(
+            peak: 0.243_949,
+            rootMeanSquare: 0.019_897,
+            activeRootMeanSquare: 0.062_924,
+            nonzeroSampleCount: 599_102,
+            sampleCount: 647_447
+        )
+        let collapsed = AudioSignalMetrics(
+            peak: 0.012_942,
+            rootMeanSquare: 0.000_409,
+            activeRootMeanSquare: 0,
+            nonzeroSampleCount: 496_153,
+            sampleCount: 647_447
         )
 
         XCTAssertFalse(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(

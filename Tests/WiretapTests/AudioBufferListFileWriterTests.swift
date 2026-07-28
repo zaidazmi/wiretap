@@ -453,8 +453,9 @@ final class AudioBufferListFileWriterTests: XCTestCase {
             commonFormat: .pcmFormatFloat32,
             sampleRate: 48_000,
             channels: 1,
-            interleaved: false
+            interleaved: true
         ))
+        XCTAssertTrue(advertisedMonoFormat.isInterleaved)
         let frameCount: AVAudioFrameCount = 480
         var interleavedSamples = [Float](
             repeating: 0,

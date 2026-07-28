@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreAudio
 @testable import Wiretap
 import XCTest
@@ -90,6 +91,50 @@ final class MicrophoneCapturePolicyTests: XCTestCase {
                 )
             )
         )
+    }
+
+    func testActiveVoIPUsesCanonicalFallbackForUnrepresentableDeviceFormat() throws {
+        var callModeDescription = AudioStreamBasicDescription(
+            mSampleRate: 48_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 12,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 12,
+            mChannelsPerFrame: 3,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+        XCTAssertNil(AVAudioFormat(streamDescription: &callModeDescription))
+
+        let resolution = try XCTUnwrap(MicrophoneInputFormatResolver.resolve(
+            streamDescriptions: [callModeDescription],
+            nominalSampleRate: 48_000
+        ))
+
+        XCTAssertTrue(resolution.usedFallback)
+        XCTAssertEqual(resolution.format.sampleRate, 48_000)
+        XCTAssertEqual(resolution.format.channelCount, 1)
+        XCTAssertEqual(resolution.format.commonFormat, .pcmFormatFloat32)
+        XCTAssertTrue(resolution.format.isInterleaved)
+    }
+
+    func testValidMicrophoneStreamFormatDoesNotUseFallback() throws {
+        let validFormat = try XCTUnwrap(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: true
+        ))
+
+        let resolution = try XCTUnwrap(MicrophoneInputFormatResolver.resolve(
+            streamDescriptions: [validFormat.streamDescription.pointee],
+            nominalSampleRate: 48_000
+        ))
+
+        XCTAssertFalse(resolution.usedFallback)
+        XCTAssertEqual(resolution.format.sampleRate, 16_000)
+        XCTAssertEqual(resolution.format.channelCount, 1)
     }
 
 }

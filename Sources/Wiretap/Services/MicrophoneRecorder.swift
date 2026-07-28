@@ -315,17 +315,87 @@ final class MicrophoneRecorder: MicrophoneRecording {
     }
 
     private static func inputFormat(for device: AudioHardwareDevice) throws -> AVAudioFormat {
-        let streams = try device.streams
+        let streamDescriptions: [AudioStreamBasicDescription] =
+            ((try? device.streams) ?? []).compactMap {
+                stream -> AudioStreamBasicDescription? in
+                guard (try? stream.direction) == .input else { return nil }
+                return try? stream.virtualFormat
+            }
+        guard let resolution = MicrophoneInputFormatResolver.resolve(
+            streamDescriptions: streamDescriptions,
+            nominalSampleRate: nominalSampleRate(for: device.id)
+        ) else {
+            throw AudioRecordingError.unsupportedFormat
+        }
 
-        for stream in streams where (try? stream.direction) == .input {
-            var streamDescription = try stream.virtualFormat
-            if let format = AVAudioFormat(streamDescription: &streamDescription),
-               format.channelCount > 0 {
-                return format
+        if resolution.usedFallback {
+            WiretapLog.capture.warning(
+                "Microphone stream format is unavailable during call mode; using canonical fallback format=\(WiretapLog.audioFormatSummary(resolution.format), privacy: .public) device=\(device.id, privacy: .public)"
+            )
+        }
+        return resolution.format
+    }
+
+    private static func nominalSampleRate(for deviceID: AudioObjectID) -> Double? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var sampleRate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &sampleRate
+        )
+        guard status == noErr else { return nil }
+        return sampleRate
+    }
+}
+
+struct MicrophoneInputFormatResolution {
+    var format: AVAudioFormat
+    var usedFallback: Bool
+}
+
+enum MicrophoneInputFormatResolver {
+    private static let defaultSampleRate = 48_000.0
+
+    static func resolve(
+        streamDescriptions: [AudioStreamBasicDescription],
+        nominalSampleRate: Double?
+    ) -> MicrophoneInputFormatResolution? {
+        for description in streamDescriptions {
+            var description = description
+            if let format = AVAudioFormat(streamDescription: &description),
+               format.channelCount > 0,
+               format.sampleRate.isFinite,
+               format.sampleRate > 0 {
+                return MicrophoneInputFormatResolution(
+                    format: format,
+                    usedFallback: false
+                )
             }
         }
 
-        throw AudioRecordingError.unsupportedFormat
+        let sampleRate = nominalSampleRate.flatMap { rate in
+            rate.isFinite && rate > 0 ? rate : nil
+        } ?? defaultSampleRate
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: true
+        ) else { return nil }
+
+        return MicrophoneInputFormatResolution(
+            format: format,
+            usedFallback: true
+        )
     }
 }
 

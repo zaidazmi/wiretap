@@ -324,19 +324,26 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
         )
         let bytesPerFrame = inputFormat.streamDescription.pointee.mBytesPerFrame
         guard bytesPerFrame > 0 else { return nil }
+        let configuredPlaneChannelCount = inputFormat.isInterleaved
+            ? max(UInt32(1), inputFormat.channelCount)
+            : 1
+        guard bytesPerFrame % configuredPlaneChannelCount == 0 else { return nil }
+        let bytesPerScalarFrame = bytesPerFrame / configuredPlaneChannelCount
+        guard bytesPerScalarFrame > 0 else { return nil }
 
         // HAL can change the IOProc buffer layout before (or without) updating
         // the stream's advertised virtual format. Native VoIP apps trigger this
-        // on the built-in microphone: a nominally mono, non-interleaved stream
-        // can arrive as one interleaved three-channel AudioBuffer.
+        // on the built-in microphone: a nominally mono stream can arrive as one
+        // interleaved three-channel AudioBuffer. Mono may itself be advertised
+        // as interleaved, so channel metadata—not that flag—is authoritative.
         let interleavedSourceChannelCount: UInt32?
         let frameByteCount: UInt32
-        if !inputFormat.isInterleaved,
-           sourceBuffers.count == 1,
+        if sourceBuffers.count == 1,
            let source = sourceBuffers.first,
-           source.mNumberChannels > 1 {
+           source.mNumberChannels > 1,
+           inputFormat.channelCount == 1 || !inputFormat.isInterleaved {
             interleavedSourceChannelCount = source.mNumberChannels
-            frameByteCount = bytesPerFrame * source.mNumberChannels
+            frameByteCount = bytesPerScalarFrame * source.mNumberChannels
             logObservedInterleavedLayout(
                 channelCount: source.mNumberChannels,
                 configuredFormat: inputFormat
@@ -374,7 +381,7 @@ final class AudioBufferListFileWriter: @unchecked Sendable {
             sourceBuffers: sourceBuffers,
             frameLength: frameLength,
             interleavedSourceChannelCount: interleavedSourceChannelCount,
-            bytesPerScalarFrame: bytesPerFrame,
+            bytesPerScalarFrame: bytesPerScalarFrame,
             into: pendingBuffer.buffer
         )
         return .success(pendingBuffer)

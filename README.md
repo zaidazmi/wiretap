@@ -23,11 +23,11 @@ Hit record before a Zoom call, a YouTube rabbit hole, or a three-hour podcast. W
 
 ## Download
 
-[![Download Wiretap](https://img.shields.io/badge/Download-Wiretap_0.1.0-2ea44f?style=for-the-badge&logo=apple)](https://github.com/zaidazmi/wiretap/releases/latest/download/Wiretap-0.1.0.dmg)
+[![Download Wiretap](https://img.shields.io/badge/Download-Wiretap_0.1.1-2ea44f?style=for-the-badge&logo=apple)](https://github.com/zaidazmi/wiretap/releases/latest/download/Wiretap-0.1.1.dmg)
 
 Wiretap requires macOS 15 or later. Open the DMG, drag Wiretap into Applications, then grant Microphone and Screen & System Audio Recording access when prompted. macOS may require Wiretap to be relaunched after the system-audio permission is first granted.
 
-The public DMG is signed with Developer ID and notarized by Apple. See the [v0.1.0 release notes](https://github.com/zaidazmi/wiretap/releases/tag/v0.1.0) or download its [SHA-256 checksum](https://github.com/zaidazmi/wiretap/releases/download/v0.1.0/Wiretap-0.1.0.dmg.sha256).
+The public DMG is signed with Developer ID and notarized by Apple. See the [v0.1.1 release notes](https://github.com/zaidazmi/wiretap/releases/tag/v0.1.1) or download its [SHA-256 checksum](https://github.com/zaidazmi/wiretap/releases/download/v0.1.1/Wiretap-0.1.1.dmg.sha256).
 
 ## How it works
 

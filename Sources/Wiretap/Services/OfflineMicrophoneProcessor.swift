@@ -143,7 +143,10 @@ struct OfflineMicrophoneProcessor {
         let effect = AVAudioUnitEffect(audioComponentDescription: component)
         effect.auAudioUnit.parameterTree?
             .parameter(withAddress: AUParameterAddress(kAUSoundIsolationParam_WetDryMixPercent))?
-            .value = 100
+            // Keep a dry voice floor. Native VoIP apps can make Sound Isolation
+            // misclassify an already-processed local voice and nearly erase it
+            // at 100% wet; 25% dry preserves speech while still reducing bleed.
+            .value = 75
 
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
@@ -298,8 +301,8 @@ enum OfflineMicrophoneProcessingPolicy {
         // enhancement: prefer speaker bleed in the raw microphone over losing
         // the local speaker entirely.
         let isolationCollapsedActiveVoice = raw.activeRootMeanSquare > 0
-            && processed.activeRootMeanSquare == 0
-            && processed.peak < raw.peak * 0.1
+            && processed.activeRootMeanSquare < raw.activeRootMeanSquare * 0.2
+            && processed.peak < raw.peak * 0.2
             && processed.rootMeanSquare < raw.rootMeanSquare * 0.1
         if isolationCollapsedActiveVoice {
             return false
@@ -350,6 +353,20 @@ enum MicrophoneLevelingPolicy {
             maximumGain,
             max(minimumGain, targetActiveRootMeanSquare / activeLevel)
         )
+    }
+}
+
+enum SystemAudioLevelingPolicy {
+    static let targetActiveRootMeanSquare: Float = 0.14
+    static let maximumGain: Float = 4
+
+    static func gain(for metrics: AudioSignalMetrics) -> Float {
+        let activeLevel = metrics.activeRootMeanSquare > 0
+            ? metrics.activeRootMeanSquare
+            : metrics.rootMeanSquare
+        guard activeLevel.isFinite, activeLevel > 0 else { return 1 }
+
+        return min(maximumGain, max(1, targetActiveRootMeanSquare / activeLevel))
     }
 }
 

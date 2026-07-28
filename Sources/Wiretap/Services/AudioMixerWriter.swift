@@ -9,13 +9,17 @@ struct AudioMixerWriter {
     private let limiter = AudioSampleLimiter(ceiling: 0.95)
     private let maximumConsecutiveRenderStalls = 128
     private let microphoneGain: Float?
+    private let systemAudioGain: Float?
     private static let maximumGainDecibels: Float = 24
     private static let maximumLinearGain = pow(10, maximumGainDecibels / 20)
 
-    // A nil override enables automatic voice leveling. Tests and specialized
-    // callers can still request an exact fixed gain.
-    init(microphoneGain: Float? = nil) {
+    // Nil overrides enable automatic source leveling. Tests and specialized
+    // callers can still request exact fixed gains.
+    init(microphoneGain: Float? = nil, systemAudioGain: Float? = nil) {
         self.microphoneGain = microphoneGain.map {
+            min(max(0, $0), Self.maximumLinearGain)
+        }
+        self.systemAudioGain = systemAudioGain.map {
             min(max(0, $0), Self.maximumLinearGain)
         }
     }
@@ -300,7 +304,23 @@ struct AudioMixerWriter {
                 return MicrophoneLevelingPolicy.fallbackGain
             }
         case .systemAudio:
-            return 1
+            if let systemAudioGain {
+                return systemAudioGain
+            }
+
+            do {
+                let metrics = try OfflineMicrophoneProcessor().analyze(inputURL: input.url)
+                let gain = SystemAudioLevelingPolicy.gain(for: metrics)
+                logger.info(
+                    "Automatic system-audio leveling activeRMS=\(metrics.activeRootMeanSquare, privacy: .public) overallRMS=\(metrics.rootMeanSquare, privacy: .public) peak=\(metrics.peak, privacy: .public) gain=\(gain, privacy: .public)"
+                )
+                return gain
+            } catch {
+                logger.warning(
+                    "Automatic system-audio leveling analysis failed; using unity gain error=\(error.localizedDescription, privacy: .public)"
+                )
+                return 1
+            }
         }
     }
 

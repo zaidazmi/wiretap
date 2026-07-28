@@ -90,6 +90,10 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertEqual(outputFile.length, 9_600)
         XCTAssertEqual(result.rawMetrics.sampleCount, 9_600)
         XCTAssertEqual(result.processedMetrics.sampleCount, 9_600)
+        XCTAssertGreaterThan(
+            result.processedMetrics.rootMeanSquare,
+            result.rawMetrics.rootMeanSquare * 0.15
+        )
     }
 
     func testSoundIsolationPolicyRejectsTruncatedOrSilentlyZeroedVoice() {
@@ -216,6 +220,33 @@ final class AudioMixerWriterTests: XCTestCase {
         ))
     }
 
+    func testSoundIsolationPolicyRejectsNonzeroButFadedWhatsAppCallVoice() {
+        // Regression values from the follow-up native WhatsApp speaker call.
+        // The processed file still crosses the active threshold, but retains
+        // only 6.5% of the raw active voice and is inaudible in the final mix.
+        let raw = AudioSignalMetrics(
+            peak: 0.354_900,
+            rootMeanSquare: 0.026_916,
+            activeRootMeanSquare: 0.085_653,
+            nonzeroSampleCount: 677_376,
+            sampleCount: 681_336
+        )
+        let faded = AudioSignalMetrics(
+            peak: 0.043_956,
+            rootMeanSquare: 0.000_630,
+            activeRootMeanSquare: 0.005_542,
+            nonzeroSampleCount: 588_967,
+            sampleCount: 681_336
+        )
+
+        XCTAssertFalse(OfflineMicrophoneProcessingPolicy.shouldUseProcessed(
+            OfflineMicrophoneProcessingResult(
+                rawMetrics: raw,
+                processedMetrics: faded
+            )
+        ))
+    }
+
     func testMicrophoneLevelingRaisesQuietVoiceMoreThanNormalVoice() {
         let quiet = AudioSignalMetrics(activeRootMeanSquare: 0.01)
         let normal = AudioSignalMetrics(activeRootMeanSquare: 0.04)
@@ -236,6 +267,31 @@ final class AudioMixerWriterTests: XCTestCase {
             6,
             accuracy: 0.001
         )
+    }
+
+    func testSystemAudioLevelingRaisesQuietCallsWithoutBoostingNormalMedia() {
+        XCTAssertEqual(
+            SystemAudioLevelingPolicy.gain(
+                for: AudioSignalMetrics(activeRootMeanSquare: 0.02)
+            ),
+            4,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            SystemAudioLevelingPolicy.gain(
+                for: AudioSignalMetrics(activeRootMeanSquare: 0.07)
+            ),
+            2,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            SystemAudioLevelingPolicy.gain(
+                for: AudioSignalMetrics(activeRootMeanSquare: 0.16)
+            ),
+            1,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(SystemAudioLevelingPolicy.gain(for: AudioSignalMetrics()), 1)
     }
 
     func testSoundIsolationPolicyAcceptsCompleteSilenceForSilentInput() {
@@ -366,6 +422,72 @@ final class AudioMixerWriterTests: XCTestCase {
         XCTAssertGreaterThan(boostedAmplitude, unityAmplitude * 9)
         XCTAssertLessThan(boostedAmplitude, unityAmplitude * 11)
         XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: boostedOutputURL), 0.25)
+    }
+
+    func testMixBoostsQuietSystemAudioByDefault() async throws {
+        let systemURL = temporaryDirectory.appendingPathComponent("quiet-system.caf")
+        let unityOutputURL = temporaryDirectory.appendingPathComponent("unity-system.m4a")
+        let boostedOutputURL = temporaryDirectory.appendingPathComponent("boosted-system.m4a")
+        try writeTone(to: systemURL, duration: 0.24, frequency: 440, amplitude: 0.02)
+
+        _ = try await AudioMixerWriter(systemAudioGain: 1).mix(
+            inputs: [
+                AudioMixerInput(url: systemURL, source: .systemAudio)
+            ],
+            outputURL: unityOutputURL
+        )
+        _ = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: systemURL, source: .systemAudio)
+            ],
+            outputURL: boostedOutputURL
+        )
+
+        let unityAmplitude = try averageAbsoluteAmplitude(
+            in: unityOutputURL,
+            from: 0.04,
+            duration: 0.12
+        )
+        let boostedAmplitude = try averageAbsoluteAmplitude(
+            in: boostedOutputURL,
+            from: 0.04,
+            duration: 0.12
+        )
+        XCTAssertGreaterThan(boostedAmplitude, unityAmplitude * 3.5)
+        XCTAssertLessThan(boostedAmplitude, unityAmplitude * 4.5)
+        XCTAssertLessThanOrEqual(try peakAbsoluteAmplitude(in: boostedOutputURL), 0.10)
+    }
+
+    func testMixKeepsNormalSystemAudioAtUnityGain() async throws {
+        let systemURL = temporaryDirectory.appendingPathComponent("normal-system.caf")
+        let unityOutputURL = temporaryDirectory.appendingPathComponent("unity-normal-system.m4a")
+        let leveledOutputURL = temporaryDirectory.appendingPathComponent("leveled-normal-system.m4a")
+        try writeTone(to: systemURL, duration: 0.24, frequency: 440, amplitude: 0.25)
+
+        _ = try await AudioMixerWriter(systemAudioGain: 1).mix(
+            inputs: [
+                AudioMixerInput(url: systemURL, source: .systemAudio)
+            ],
+            outputURL: unityOutputURL
+        )
+        _ = try await AudioMixerWriter().mix(
+            inputs: [
+                AudioMixerInput(url: systemURL, source: .systemAudio)
+            ],
+            outputURL: leveledOutputURL
+        )
+
+        let unityAmplitude = try averageAbsoluteAmplitude(
+            in: unityOutputURL,
+            from: 0.04,
+            duration: 0.12
+        )
+        let leveledAmplitude = try averageAbsoluteAmplitude(
+            in: leveledOutputURL,
+            from: 0.04,
+            duration: 0.12
+        )
+        XCTAssertEqual(leveledAmplitude, unityAmplitude, accuracy: 0.005)
     }
 
     func testMixCanKeepMicrophoneAtUnityGain() async throws {
